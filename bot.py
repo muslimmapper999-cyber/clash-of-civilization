@@ -9246,7 +9246,15 @@ async def post_init(app):
     asyncio.create_task(stock_market_loop(app))
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    from telegram.request import HTTPXRequest
+    request = HTTPXRequest(
+        connection_pool_size=8,
+        read_timeout=30,
+        write_timeout=30,
+        connect_timeout=30,
+        pool_timeout=30,
+    )
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).request(request).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler((filters.TEXT & ~filters.COMMAND) | filters.PHOTO | filters.Document.ALL, handle_message))
