@@ -1803,9 +1803,8 @@ def calc_estimated_income(p, data):
     total_bonus = solar_bonus + semi_bonus + space_bonus + ev_harvest + min_fac
     total = 0
     for crop, count in crops_p.items():
-        fc = FARM_CROPS.get(crop, {})
-        amt = fc.get("amount", 10)
-        if crop in preferred: amt = int(amt * 1.5)
+        fc  = FARM_CROPS.get(crop, {})
+        amt = p.get("crops_amount", {}).get(crop, fc.get("amount", 10))
         if min_farm > 0: amt = int(amt * (1 + min_farm))
         total += amt * count * CROP_SELL_PRICE.get(crop, 20)
     for res, count in facs.items():
@@ -1844,6 +1843,9 @@ def calc_estimated_income(p, data):
         ports = facs.get("ميناء", 0)
         tax_rate = min(0.80, 0.40 + ports * 0.15 + (0.10 if "هيمنة_اقتصادية" in get_perks(p.get("xp",0)) else 0))
         total += int(col_income * tax_rate)
+    # خصم الاحتلال — لو محتلة بياخد المحتل 60%
+    if p.get("occupied_by"):
+        total = int(total * 0.40)
     return total
 
 async def do_harvest(app, uid, p, data):
@@ -3921,6 +3923,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if str(chat.id) not in allowed_quick and not is_required_group:
                 return
 
+    if not update.message:
+        return
     if update.message.text:
         text = update.message.text.strip()
     elif update.message.caption:
@@ -4509,55 +4513,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         traitor = f" 🗡️{p.get('traitor_label','خائن')}" if p.get("traitor") else ""
         xp_bar  = progress_bar(xp - lvl["xp"], (nxt["xp"] - lvl["xp"]) if nxt else (xp - lvl["xp"] or 1))
 
-        # حساب الاقتصاد — يعكس الحصاد الفعلي بدقة
-        region_p   = p.get("region", "")
-        preferred_p = list(REGION_PREFERRED_CROPS.get(region_p, []))
-        for mr in p.get("merged_regions", []):
-            for crop in REGION_PREFERRED_CROPS.get(mr, []):
-                if crop not in preferred_p: preferred_p.append(crop)
-        # المزارع — مع بونص المحاصيل المفضلة
-        farm_income = sum(
-            p.get("crops_amount",{}).get(cr, FARM_CROPS.get(cr,{}).get("amount",10))
-            * (1.5 if cr in preferred_p else 1.0)
-            * cn * CROP_SELL_PRICE.get(cr, 20)
-            for cr, cn in crops_p.items()
-        )
-        # المنشآت — مع مضاعفات
-        oil_ports_e  = facs.get("ميناء_نفطي", 0)
-        oil_bonus_e  = min(0.60, oil_ports_e * 0.20)
-        solar_e      = facs.get("طاقة_شمسية", 0)
-        solar_base_e = min(0.32, solar_e * 0.08)
-        solar_xtra_e = RESOURCE_FACILITIES.get("طاقة_شمسية",{}).get("regions_bonus_extra",0)
-        solar_bon_e  = solar_base_e + (solar_xtra_e * solar_e if region_p in RESOURCE_FACILITIES.get("طاقة_شمسية",{}).get("regions_bonus",[]) else 0)
-        semi_e       = min(0.90, facs.get("اشباه_موصلات",0) * 0.30)
-        space_e      = min(0.60, facs.get("برنامج_فضائي",0) * 0.20)
-        cab_e        = p.get("cabinet", {})
-        min_fac_e    = 0.15 if cab_e.get("وزير_تقنية") else 0.0
-        min_farm_e   = 0.20 if cab_e.get("وزير_زراعة") else 0.0
-        ev_eff_e     = get_world_event_effects(data)
-        ev_harv_e    = ev_eff_e.get("harvest_bonus", 0.0)
-        ev_tax_e     = ev_eff_e.get("tax_bonus", 0.0)
-        total_bon_e  = solar_bon_e + semi_e + space_e + ev_harv_e + min_fac_e
-        # منشآت صناعية
-        fac_income = sum(
-            RESOURCE_FACILITIES.get(r,{}).get("amount",0) * c
-            * CROP_SELL_PRICE.get(r, 0)
-            * (1 + oil_bonus_e if r in ("نفط","غاز") else 1)
-            for r, c in facs.items()
-            if r not in ("ميناء_نفطي","طاقة_شمسية")
-        )
-        num_proj_s   = sum(facs.values()) + sum(crops_p.values())
-        base_t       = p.get("territories",1)*500 + 1000
-        terr_inc_e   = int((base_t + num_proj_s*300 + infra*1500) * (1 + total_bon_e) * (1 + ev_tax_e))
-        # ضرائب المستعمرات
-        colony_est = 0
-        for _, cp2 in data["players"].items():
-            if cp2.get("colony_of") == p["country_name"]:
-                ports_e   = facs.get("ميناء",0)
-                tax_r_e   = min(0.80, 0.40 + ports_e*0.15 + (0.10 if "هيمنة_اقتصادية" in get_perks(xp) else 0))
-                col_inc_e, _, _ = calc_colony_harvest(cp2)
-                colony_est += int(col_inc_e * tax_r_e)
-        econ = int(farm_income * (1+min_farm_e) + fac_income * (1+total_bon_e) + terr_inc_e + colony_est)
+        # حساب الاقتصاد — يستخدم calc_estimated_income للتوحيد
+        econ = calc_estimated_income(p, data)
         total_tons = sum(
             FARM_CROPS.get(c,{}).get("amount",0)*n*(1.5 if c in REGION_PREFERRED_CROPS.get(p["region"],[]) else 1)
             for c,n in crops_p.items()
@@ -7500,23 +7457,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("🔒 التجسس يتطلب مستوى *5 (سلطنة)*.", parse_mode="Markdown"); return
         tname = ntext.replace("تجسس علي","").replace("جاسوس علي","").strip()
         tuid, tp = find_by_name(data, tname)
-        # لو ما لاقيش، حاول بدون (محتلة) أو (مستعمرة)
         if not tp:
             tuid, tp = find_by_name(data, tname.replace("محتله","").replace("مستعمره","").strip())
         if not tp: await update.message.reply_text(f"❌ مش لاقي دولة اسمها '{tname}'."); return
         if tuid == str(uid): await update.message.reply_text("❌ تجسس على نفسك؟ 🤦"); return
-        # تكلفة تتدرج مع المستوى
-        spy_lvl   = p.get("xp",0)
-        cost      = 5000
-        # فرصة الانكشاف — تنخفض مع المستوى وترتفع لو الهدف عنده تحصينات
-        target_forts  = tp.get("facilities",{}).get("تحصين", 0)
-        catch_chance  = max(0.05, 0.30 - (spy_lvl / 50000) * 0.15 + target_forts * 0.08)
-        caught = random.random() < catch_chance
+        cost = 5000
         if p["gold"] < cost:
             await update.message.reply_text(f"❌ التجسس يكلف {CUR}{cost:,}. عندك {CUR}{p['gold']:,}."); return
+        # فرصة الانكشاف
+        spy_lvl       = p.get("xp", 0)
+        target_forts  = tp.get("facilities", {}).get("تحصين", 0)
+        catch_chance  = max(0.05, 0.30 - (spy_lvl / 50000) * 0.15 + target_forts * 0.08)
+        caught        = random.random() < catch_chance
+        # خصم التكلفة وsave مرة واحدة
         data["players"][str(uid)]["gold"] -= cost
+        save_data(data)
         if caught:
-            save_data(data)
             log_event(data, f"جاسوس {p['country_name']} انكشف في {tp['country_name']}", "🚨")
             await update.message.reply_text(
                 f"🚨 *جاسوسك انكشف!*\n{sep()}\n"
@@ -7531,21 +7487,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: pass
             return
         # نجح التجسس — تقرير تفصيلي
-        save_data(data)
-        tp_level  = get_level(tp.get("xp",0))
-        tp_facs   = tp.get("facilities",{})
-        tp_fleet  = tp.get("fleet",{})
-        tp_weapons= tp.get("weapons",{})
-        # حساب قوة الهجوم التقريبية
+        tp_level  = get_level(tp.get("xp", 0))
+        tp_facs   = tp.get("facilities", {})
+        tp_fleet  = tp.get("fleet", {})
+        tp_weapons = tp.get("weapons", {})
+        # قوة الهجوم التقريبية
         weap_dmg = sum(
-            WEAPONS[w].get("damage_bonus_each",0)*c if WEAPONS.get(w,{}).get("unit") else
-            WEAPONS[w].get("damage_bonus",0)
-            for w,c in tp_weapons.items() if w in WEAPONS and not WEAPONS[w].get("one_use")
+            WEAPONS[w].get("damage_bonus_each", 0) * c if WEAPONS.get(w, {}).get("unit") else
+            WEAPONS[w].get("damage_bonus", 0)
+            for w, c in tp_weapons.items() if w in WEAPONS and not WEAPONS[w].get("one_use")
         )
         est_att = int(tp["army"] * (1 + weap_dmg))
-        # التحصينات
-        forts_def = tp_facs.get("تحصين",0)
-        terrain_b = TERRAIN_DEFENSE.get(tp.get("region",""), 0)
+        forts_def     = tp_facs.get("تحصين", 0)
+        terrain_b     = TERRAIN_DEFENSE.get(tp.get("region", ""), 0)
         total_def_bonus = forts_def * 0.15 + terrain_b
         # أسلحة خطيرة
         danger_weapons = [w for w in tp_weapons if ("قنبلة" in w or "بيولوجي" in w or "طاعون" in w or "وباء" in w or "فيروس" in w) and tp_weapons[w] > 0]
@@ -7554,11 +7508,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if tp_fleet:
             naval_p, _ = get_naval_power(tp, data)
             fleet_txt  = f"\n⚓ قوة أسطول: *{naval_p:,}*"
+        # escape _ في أسماء المنشآت
         facs_top = sorted(tp_facs.items(), key=lambda x: x[1], reverse=True)[:4]
-        facs_txt = " | ".join(f"{k}×{v}" for k,v in facs_top) or "—"
-        orgs_count = sum(1 for ov in data.get("organizations",{}).values() if tp["country_name"] in ov.get("members",[]))
-        at_war_txt = f"⚔️ في حرب مع: {', '.join(tp.get('at_war',[]))}" if tp.get("at_war") else "🕊️ لا حروب نشطة"
-        await update.message.reply_text(
+        facs_txt = " | ".join(
+            f"{RESOURCE_FACILITIES.get(k, {}).get('name', k).replace('_',' ')}×{v}"
+            for k, v in facs_top
+        ) or "—"
+        orgs_count = sum(1 for ov in data.get("organizations", {}).values() if tp["country_name"] in ov.get("members", []))
+        at_war_txt = f"⚔️ في حرب مع: {', '.join(tp.get('at_war', []))}" if tp.get("at_war") else "🕊️ لا حروب نشطة"
+        success_pct = max(10, min(90, int((est_att / (max(1, tp["army"] * (1 + total_def_bonus)))) * 50 + 30)))
+        spy_msg = (
             f"🕵️ *تقرير المخابرات السري*\n"
             f"🎯 الهدف: *{md(tp['country_name'])}*\n{sep()}\n"
             f"⚔️ الجيش: *{tp['army']:,}* جندي\n"
@@ -7572,9 +7531,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🏭 منشآت: {facs_txt}"
             f"{fleet_txt}{nuke_txt}\n"
             f"{sep()}\n{at_war_txt}\n"
-            f"🎯 فرصة نجاح الهجوم: *~{max(10,min(90,int((est_att/(max(1,tp['army']*(1+total_def_bonus)))*50+30))))}%*\n"
-            f"_💸 كلّف {CUR}{cost:,} — فرصة الانكشاف كانت {int(catch_chance*100)}%_",
-            parse_mode="Markdown")
+            f"🎯 فرصة نجاح الهجوم: *~{success_pct}%*\n"
+            f"_💸 كلّف {CUR}{cost:,} — فرصة الانكشاف كانت {int(catch_chance*100)}%_"
+        )
+        try:
+            await update.message.reply_text(spy_msg, parse_mode="Markdown")
+        except Exception:
+            # fallback بدون Markdown لو في مشكلة تنسيق
+            await update.message.reply_text(
+                spy_msg.replace("*","").replace("_","").replace("`",""))
         return
 
 
@@ -8672,7 +8637,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ مش لاقي '{cname}'."); return
             real_name = found_p["country_name"]
             del data["players"][found_uid]
-            # تنظيف مراجع الدولة في باقي اللاعبين
             for other_uid, op in data["players"].items():
                 op["at_war"]         = [x for x in op.get("at_war",[]) if norm(x) != norm(real_name)]
                 op["war_declared"]   = [x for x in op.get("war_declared",[]) if norm(x) != norm(real_name)]
@@ -8686,14 +8650,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if norm(op.get("colony_of",""))    == norm(real_name):
                     op["colony_of"] = None
                     op["country_name"] = op["country_name"].replace(" (مستعمرة)","")
-            # تنظيف الأحلاف
             for org_name in list(data.get("organizations",{}).keys()):
                 org = data["organizations"][org_name]
                 if real_name in org["members"]: org["members"].remove(real_name)
                 if org.get("founder") == real_name and org["members"]: org["founder"] = org["members"][0]
                 if not org["members"] or org.get("founder") == real_name:
                     del data["organizations"][org_name]
-            # تنظيف البيانات الأخرى
             data["weapon_market"]         = [e for e in data.get("weapon_market",[]) if norm(e.get("seller","")) != norm(real_name)]
             data["peace_requests"]         = {k:v for k,v in data.get("peace_requests",{}).items() if norm(v.get("from_name","")) != norm(real_name) and norm(v.get("to_name","")) != norm(real_name)}
             data["org_invites"]            = {k:v for k,v in data.get("org_invites",{}).items() if norm(v.get("from_name","")) != norm(real_name) and norm(v.get("to_name","")) != norm(real_name)}
