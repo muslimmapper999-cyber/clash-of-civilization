@@ -8689,3 +8689,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
 
+
+# ==================== main ====================
+async def post_init(app):
+    asyncio.create_task(disaster_loop(app))
+    asyncio.create_task(regional_disaster_loop(app))
+    asyncio.create_task(harvest_loop(app))
+    asyncio.create_task(harvest_reminder_loop(app))
+    asyncio.create_task(news_loop(app))
+    asyncio.create_task(daily_stats_loop(app))
+    asyncio.create_task(political_events_loop(app))
+    asyncio.create_task(inactivity_loop(app))
+    asyncio.create_task(world_events_loop(app))
+    asyncio.create_task(stock_market_loop(app))
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler((filters.TEXT & ~filters.COMMAND) | filters.PHOTO | filters.Document.ALL, handle_message))
+    print("✅ البوت شغال!")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
