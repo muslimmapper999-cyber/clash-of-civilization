@@ -1147,6 +1147,13 @@ def status_emoji(v):
 def sep(c="—", n=16): return c*n
 def sep2(): return "·"*16
 def box_title(e, t): return f"『 {e} *{t}* 』"
+
+async def reply(update, text, **kw):
+    """رد مع مراعاة التوبيك تلقائياً"""
+    thread_id = getattr(update.message, "message_thread_id", None)
+    if thread_id and "message_thread_id" not in kw:
+        kw["message_thread_id"] = thread_id
+    return await update.message.reply_text(text, **kw)
 def section(title): return f"▸ *{title}*"
 def escape_md(t):
     """هروب من رموز Markdown الخاصة في أسماء الدول"""
@@ -3533,12 +3540,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ======= تحديد التوبيك عشان الرد يروح في نفس المكان =======
     thread_id = getattr(update.message, "message_thread_id", None)
-    _orig_reply = update.message.reply_text
-    async def reply_text(txt, **kw):
-        if thread_id and "message_thread_id" not in kw:
-            kw["message_thread_id"] = thread_id
-        return await _orig_reply(txt, **kw)
-    update.message.reply_text = reply_text
+    context.user_data["thread_id"] = thread_id
 
     # ======= تجاهل الرسائل غير الأوامر بصمت =======
     # الكلمات الأولى المعروفة كأوامر
@@ -3826,6 +3828,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"); return
         # تنظيف أي session قديم
         REGISTRATION_STATE.pop(uid, None)
+        # حفظ thread_id للاستخدام لاحقاً في التسجيل
+        _reg_thread_id = getattr(update.message, "message_thread_id", None)
+        _reg_chat_id   = update.effective_chat.id
         # بناء أزرار الدول المتاحة مقسمة حسب المنطقة
         taken = {p["region"] for p in data["players"].values()}
         # أضف المناطق المدمجة
@@ -3855,13 +3860,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if row: keyboard.append(row)
         if not keyboard:
             await update.message.reply_text("❌ مفيش دول متاحة حالياً!"); return
-        sent = await update.message.reply_text(
-            f"{box_title('🎮','الانضمام للعبة')}\n\n"
-            f"أهلاً *{uname}*! 👋\n\n"
-            f"اختر دولتك من القائمة:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown")
+        sent_kw = {
+            "text": f"{box_title('🎮','الانضمام للعبة')}\n\nأهلاً *{uname}*! 👋\n\nاختر دولتك من القائمة:",
+            "reply_markup": InlineKeyboardMarkup(keyboard),
+            "parse_mode": "Markdown"
+        }
+        sent = await update.message.reply_text(**sent_kw)
         register_msg(sent, uid)
+        # حفظ thread_id في state عشان نستخدمه في خطوات التسجيل
+        context.user_data["reg_thread_id"] = _reg_thread_id
+        context.user_data["reg_chat_id"]   = _reg_chat_id
         return
 
     # ======= معالجة الريبلاي — خطوات التسجيل =======
@@ -9504,9 +9512,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if region not in AVAILABLE_REGIONS or region in taken:
             await query.edit_message_text(f"❌ *{region}* اتأخذت للتو! اضغط `انضم` مرة تانية.", parse_mode="Markdown"); return
         # بعت رسالة طلب الاسم في نفس التوبيك
-        thread_id_reg = getattr(query.message, "message_thread_id", None)
+        thread_id_reg = context.user_data.get("reg_thread_id")
+        chat_id_reg   = context.user_data.get("reg_chat_id") or query.message.chat_id
         send_kwargs = {
-            "chat_id": query.message.chat_id,
+            "chat_id": chat_id_reg,
             "text": f"🗺️ اخترت: *{region}*\n\n✏️ اكتب *اسم دولتك* — ريبلاي على الرسالة دي:",
             "parse_mode": "Markdown"
         }
