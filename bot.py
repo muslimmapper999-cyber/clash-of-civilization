@@ -3529,7 +3529,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uname = update.effective_user.first_name
     data  = load_data()
     clean_old_requests(data)
-    ntext = norm(text).lower()  # نسخة منقحة للمقارنة (lowercase للأوامر الإنجليزية)
+    ntext = norm(text).lower()
+
+    # ======= تحديد التوبيك عشان الرد يروح في نفس المكان =======
+    thread_id = getattr(update.message, "message_thread_id", None)
+    _orig_reply = update.message.reply_text
+    async def reply_text(txt, **kw):
+        if thread_id and "message_thread_id" not in kw:
+            kw["message_thread_id"] = thread_id
+        return await _orig_reply(txt, **kw)
+    update.message.reply_text = reply_text
 
     # ======= تجاهل الرسائل غير الأوامر بصمت =======
     # الكلمات الأولى المعروفة كأوامر
@@ -3828,7 +3837,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             taken.add(region)
         regions_by_area = {
             "🌍 المشرق العربي":   ["مصر","سوريا","لبنان","فلسطين","الاردن","العراق","قبرص"],
-            "🛢️ الخليج":          ["السعودية","الكويت","قطر","الامارات","عمان","اليمن","البحرين"],
+            "🛢️ الخليج":          ["السعودية","الكويت","قطر","الامارات","عمان","اليمن"],
             "🌅 المغرب العربي":    ["المغرب","الجزائر","تونس","ليبيا","موريتانيا"],
             "🌍 أفريقيا":         ["السودان","جنوب_السودان","تشاد","الصومال","جيبوتي","ارتريا"],
             "🏔️ القوقاز وإيران":  ["ايران","تركيا","اذربيجان","ارمينيا","جورجيا"],
@@ -3908,12 +3917,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "territories": 1, "allies": [], "at_war": [], "last_tax": 0,
                 "player_code": code, "xp": 0, "facilities": {}, "crops": {},
                 "crops_amount": {}, "infrastructure": 0, "capital": capital, "traitor": False,
-                "wars_lost": 0, "wars_won": 0, "disasters_hit": 0, "last_attack": 0,
-                "loans": [], "weapons": {}, "occupied_by": None, "colony_of": None,
-                "nuke_banned": 0, "colony_last_harvest": 0, "protected_by": None,
-                "protects": [], "war_declared": [], "peace_treaties": {},
-                "last_active": time.time(),
+                "traitor_label": "", "wars_lost": 0, "wars_won": 0, "disasters_hit": 0,
+                "last_attack": 0, "loans": [], "weapons": {}, "occupied_by": None,
+                "colony_of": None, "nuke_banned": 0, "colony_last_harvest": 0,
+                "protected_by": None, "protects": [], "war_declared": [],
+                "peace_treaties": {}, "last_active": time.time(),
                 "happiness_bonus": 0, "last_collapse": 0, "frozen": False, "fleet": {},
+                "merged_regions": [], "population": 1_000_000,
+                "portfolio": {}, "last_market_trade": 0,
+                "last_ghazw": 0, "occ_last_harvest": 0,
+                "harvest_reminded": 0, "ban_until": 0,
+                "cabinet": {}, "war_log": [],
             }
             save_data(data)
             REGISTRATION_STATE.pop(uid, None)
@@ -9489,12 +9503,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             taken.add(reg)
         if region not in AVAILABLE_REGIONS or region in taken:
             await query.edit_message_text(f"❌ *{region}* اتأخذت للتو! اضغط `انضم` مرة تانية.", parse_mode="Markdown"); return
-        # بعت رسالة طلب الاسم
-        name_msg = await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text=f"🗺️ اخترت: *{region}*\n\n"
-                 f"✏️ اكتب *اسم دولتك* — ريبلاي على الرسالة دي:",
-            parse_mode="Markdown")
+        # بعت رسالة طلب الاسم في نفس التوبيك
+        thread_id_reg = getattr(query.message, "message_thread_id", None)
+        send_kwargs = {
+            "chat_id": query.message.chat_id,
+            "text": f"🗺️ اخترت: *{region}*\n\n✏️ اكتب *اسم دولتك* — ريبلاي على الرسالة دي:",
+            "parse_mode": "Markdown"
+        }
+        if thread_id_reg:
+            send_kwargs["message_thread_id"] = thread_id_reg
+        name_msg = await context.bot.send_message(**send_kwargs)
         REGISTRATION_STATE[uid] = {
             "step":        "waiting_name",
             "region":      region,
