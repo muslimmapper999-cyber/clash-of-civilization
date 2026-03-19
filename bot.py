@@ -11073,6 +11073,3 @@ def main():
 
     print("✅ البوت شغال!")
     app.run_polling()
-
-if __name__ == "__main__":
-    main(
