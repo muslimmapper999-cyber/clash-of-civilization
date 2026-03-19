@@ -343,26 +343,103 @@ def get_max_farms(infra, region="", merged_regions=None):
     return max(3, limit)
 
 # ==================== الكوارث ====================
+# ==================== نظام الطقس الموسمي ====================
+SEASONS = {
+    "ربيع": {
+        "emoji": "🌸", "months": [3,4,5],
+        "farm_bonus":     0.20,
+        "army_penalty":   0.0,
+        "gold_bonus":     0.05,
+        "desc": "الربيع — موسم الخصب والنمو"
+    },
+    "صيف": {
+        "emoji": "☀️", "months": [6,7,8],
+        "farm_bonus":     0.10,
+        "army_penalty":   0.05,
+        "gold_bonus":     0.10,
+        "desc": "الصيف — موسم التجارة والحر"
+    },
+    "خريف": {
+        "emoji": "🍂", "months": [9,10,11],
+        "farm_bonus":     0.05,
+        "army_penalty":   0.0,
+        "gold_bonus":     0.15,
+        "desc": "الخريف — موسم الحصاد والمعارك"
+    },
+    "شتاء": {
+        "emoji": "❄️", "months": [12,1,2],
+        "farm_bonus":    -0.30,
+        "army_penalty":   0.15,
+        "gold_bonus":    -0.05,
+        "desc": "الشتاء — موسم الصقيع والكساد"
+    },
+}
+
+REGIONAL_SEASON_EFFECTS = {
+    "صحراوي": {
+        "regions": ["السعودية","الكويت","قطر","الامارات","عمان","ليبيا","الجزائر","موريتانيا","تشاد"],
+        "صيف":   {"farm_bonus": -0.20},
+        "شتاء":  {"farm_bonus":  0.10},
+    },
+    "معتدل": {
+        "regions": ["تركيا","لبنان","سوريا","الاردن","المغرب","تونس","جورجيا","ارمينيا","اذربيجان","قبرص","فلسطين"],
+        "شتاء":  {"army_penalty": 0.20},
+        "ربيع":  {"farm_bonus":   0.10},
+    },
+    "استوائي": {
+        "regions": ["الصومال","جيبوتي","ارتريا","جنوب_السودان"],
+        "صيف":   {"farm_bonus": 0.15},
+        "شتاء":  {"farm_bonus": 0.10},
+    },
+}
+
+def get_current_season():
+    import datetime
+    month = datetime.datetime.now().month
+    for name, info in SEASONS.items():
+        if month in info["months"]:
+            return name, info
+    return "ربيع", SEASONS["ربيع"]
+
+def get_season_effects(region):
+    season_name, season = get_current_season()
+    effects = {
+        "farm_bonus":   season["farm_bonus"],
+        "army_penalty": season["army_penalty"],
+        "gold_bonus":   season["gold_bonus"],
+    }
+    for climate, cdata in REGIONAL_SEASON_EFFECTS.items():
+        if region in cdata["regions"] and season_name in cdata:
+            for k, v in cdata[season_name].items():
+                effects[k] = effects.get(k, 0) + v
+    return season_name, season, effects
+
 DISASTERS = [
-    # عسكرية/اقتصادية
-    {"name":"زلزال مدمر",       "emoji":"🌍","effect":"army",        "loss":(0.2,0.4),  "msg":"ضرب زلزال مدمر! خسرت جزء من جيشك!"},
-    {"name":"وباء",             "emoji":"🦠","effect":"army",        "loss":(0.1,0.3),  "msg":"وباء اجتاح جيشك!"},
+    {"name":"زلزال مدمر",       "emoji":"🌍","effect":"facilities",  "loss":(1,3),      "msg":"ضرب زلزال مدمر! تضررت منشآتك!"},
+    {"name":"زلزال متوسط",      "emoji":"🌍","effect":"facilities",  "loss":(1,2),      "msg":"زلزال أتلف بعض منشآتك!"},
+    # أوبئة — تضرب الجيش والسكان
+    {"name":"وباء",             "emoji":"🦠","effect":"army",        "loss":(0.10,0.25),"msg":"وباء اجتاح بلادك وضرب جيشك!"},
+    {"name":"وباء حاد",         "emoji":"🦠","effect":"army",        "loss":(0.20,0.40),"msg":"وباء حاد يجتاح بلادك!"},
+    # فيضانات — تضرب المنشآت والمحاصيل
     {"name":"فيضانات",          "emoji":"🌊","effect":"facilities",  "loss":(1,2),      "msg":"فيضانات دمرت بعض منشآتك!"},
-    {"name":"حريق مصانع",       "emoji":"🔥","effect":"facilities",  "loss":(1,1),      "msg":"حريق دمر إحدى منشآتك!"},
-    {"name":"انهيار اقتصادي",   "emoji":"📉","effect":"gold",        "loss":(0.1,0.2),  "msg":"انهيار اقتصادي! خسرت جزء من مثاقيلك!"},
-    # زراعية — تصيب محصول عشوائي
+    {"name":"فيضان الحقول",     "emoji":"💧","effect":"crops_all",   "loss":(0.15,0.35),"msg":"فيضان غمر حقولك!",
+     "regions": {"مناطق_رطبة":["مصر","العراق","سوريا","تركيا","لبنان"]}},
+    # حرائق
+    {"name":"حريق مصانع",       "emoji":"🔥","effect":"facilities",  "loss":(1,2),      "msg":"حريق دمر إحدى منشآتك!"},
+    # اقتصادية
+    {"name":"انهيار اقتصادي",   "emoji":"📉","effect":"gold",        "loss":(0.10,0.20),"msg":"انهيار اقتصادي! خسرت جزء من مثاقيلك!"},
+    {"name":"تضخم حاد",         "emoji":"💸","effect":"gold",        "loss":(0.05,0.12),"msg":"تضخم اقتصادي يرفع أسعار الاستيراد!"},
+    # زراعية
     {"name":"جفاف شديد",        "emoji":"☀️","effect":"crops_one",   "loss":(0.4,0.7),  "msg":"جفاف أثّر على أحد محاصيلك!"},
     {"name":"غزو الجراد",       "emoji":"🦗","effect":"crops_all",   "loss":(0.2,0.5),  "msg":"أسراب الجراد التهمت محاصيلك!"},
     {"name":"صقيع مبكر",        "emoji":"🌨️","effect":"crops_one",  "loss":(0.3,0.6),  "msg":"الصقيع أتلف أحد محاصيلك!",
-     "regions": {"مناطق_باردة":["تركيا","سوريا","الاردن","لبنان","فلسطين","قبرص"]}},
+     "regions": {"مناطق_باردة":["تركيا","سوريا","الاردن","لبنان","فلسطين","قبرص","اذربيجان","ارمينيا","جورجيا","ايران"]}},
     {"name":"عاصفة رملية",      "emoji":"🌪️","effect":"crops_all",  "loss":(0.1,0.3),  "msg":"عاصفة رملية غطّت حقولك!",
-     "regions": {"مناطق_صحراوية":["السعودية","الكويت","العراق","قطر","الامارات","عمان","ايران","اليمن","مصر"]}},
+     "regions": {"مناطق_صحراوية":["السعودية","الكويت","العراق","قطر","الامارات","عمان","ايران","اليمن","مصر","ليبيا","الجزائر","موريتانيا","السودان","تشاد"]}},
     {"name":"فطر المحاصيل",     "emoji":"🍄","effect":"crops_type",  "loss":(0.5,0.9),  "crop_types":["قمح","ارز","فول"],
      "msg":"فطر أصاب محاصيلك الحبوبية!"},
     {"name":"عفن الثمار",       "emoji":"🪲","effect":"crops_type",  "loss":(0.4,0.8),  "crop_types":["زيتون","بن"],
      "msg":"عفن أتلف مزارع الثمار!"},
-    {"name":"فيضان الحقول",     "emoji":"💧","effect":"crops_all",   "loss":(0.15,0.35),"msg":"فيضان غمر حقولك!",
-     "regions": {"مناطق_رطبة":["مصر","العراق","سوريا","تركيا","لبنان"]}},
 ]
 
 # ==================== الكوارث الإقليمية ====================
@@ -381,11 +458,11 @@ REGIONAL_DISASTERS = [
         "name": "أزمة نفطية إقليمية",
         "emoji": "📉",
         "regions": ["السعودية","الكويت","العراق","ايران","قطر","الامارات","عمان","الجزائر","ليبيا"],
-        "effect": "gold", "loss": (0.08, 0.18),
+        "effect": "gold", "loss": (0.06, 0.14),
         "msg_private": "انهيار أسعار النفط ضرب خزينتك!",
         "msg_channel": "انهيار حاد في أسعار النفط يضرب الدول المنتجة!",
     },
-    # ===== المشرق =====
+    # ===== الصحراء =====
     {
         "name": "عاصفة رملية كبرى",
         "emoji": "🌪️",
@@ -394,30 +471,34 @@ REGIONAL_DISASTERS = [
         "msg_private": "عاصفة رملية إقليمية ضربت محاصيلك!",
         "msg_channel": "عاصفة رملية عاتية تجتاح الصحاري الكبرى!",
     },
+    # ===== الأوبئة =====
     {
         "name": "وباء إقليمي",
         "emoji": "🦠",
         "regions": ["مصر","اليمن","العراق","سوريا","السودان","الصومال","جيبوتي","ارتريا"],
-        "effect": "army", "loss": (0.1, 0.25),
-        "msg_private": "وباء إقليمي ضرب جيشك!",
-        "msg_channel": "وباء خطير ينتشر في منطقة صراع الحضارات!",
+        "effect": "army", "loss": (0.10, 0.25),
+        "msg_private": "وباء إقليمي ضرب جيشك وسكانك!",
+        "msg_channel": "وباء خطير ينتشر في منطقة الشرق الأوسط!",
     },
+    # ===== المتوسط =====
     {
         "name": "زلازل البحر المتوسط",
         "emoji": "🌍",
         "regions": ["تركيا","سوريا","لبنان","فلسطين","قبرص","مصر","الجزائر","المغرب","تونس","ليبيا"],
-        "effect": "facilities", "loss": (1, 2),
+        "effect": "facilities", "loss": (1, 3),
         "msg_private": "زلزال إقليمي دمّر بعض منشآتك!",
         "msg_channel": "سلسلة زلازل تضرب سواحل البحر المتوسط!",
     },
+    # ===== الجراد =====
     {
         "name": "غزو الجراد الإقليمي",
         "emoji": "🦗",
-        "regions": ["اليمن","السعودية","عمان","مصر","الاردن","السودان","ارتريا","جيبوتي","الصومال","اثيوبيا"],
+        "regions": ["اليمن","السعودية","عمان","مصر","الاردن","السودان","ارتريا","جيبوتي","الصومال"],
         "effect": "crops_all", "loss": (0.25, 0.5),
         "msg_private": "أسراب الجراد الإقليمية التهمت محاصيلك!",
         "msg_channel": "أسراب جراد ضخمة تجتاح شبه الجزيرة العربية والقرن الأفريقي!",
     },
+    # ===== الأنهار =====
     {
         "name": "فيضانات الأنهر",
         "emoji": "🌊",
@@ -425,6 +506,14 @@ REGIONAL_DISASTERS = [
         "effect": "facilities", "loss": (1, 2),
         "msg_private": "فيضانات الأنهار دمّرت بعض منشآتك!",
         "msg_channel": "فيضانات ضخمة تغرق سهول الأنهار الكبرى!",
+    },
+    {
+        "name": "فيضانات وغرق المحاصيل",
+        "emoji": "💧",
+        "regions": ["العراق","مصر","السودان","سوريا","تركيا"],
+        "effect": "crops_all", "loss": (0.2, 0.45),
+        "msg_private": "الفيضانات غمرت حقولك!",
+        "msg_channel": "مياه الفيضان تغمر الحقول الزراعية في وادي الأنهار!",
     },
     # ===== المغرب العربي =====
     {
@@ -436,7 +525,7 @@ REGIONAL_DISASTERS = [
         "msg_channel": "موجة جفاف قاسية تضرب دول المغرب العربي!",
     },
     {
-        "name": "عاصفة رملية صحراء الكبرى",
+        "name": "عاصفة رملية الصحراء الكبرى",
         "emoji": "🌪️",
         "regions": ["ليبيا","الجزائر","تشاد","موريتانيا","السودان"],
         "effect": "crops_all", "loss": (0.3, 0.55),
@@ -449,7 +538,7 @@ REGIONAL_DISASTERS = [
         "emoji": "🌵",
         "regions": ["الصومال","جيبوتي","ارتريا","اليمن","السودان"],
         "effect": "crops_all", "loss": (0.35, 0.65),
-        "msg_private": "مجاعة إقليمية ضربت محاصيلك بشدة!",
+        "msg_private": "مجاعة إقليمية ضربت محاصيلك بشدة وأثرت على سكانك!",
         "msg_channel": "مجاعة حادة تضرب منطقة القرن الأفريقي!",
     },
     {
@@ -465,7 +554,7 @@ REGIONAL_DISASTERS = [
         "name": "زلازل القوقاز",
         "emoji": "🌍",
         "regions": ["تركيا","ايران","اذربيجان","ارمينيا","جورجيا"],
-        "effect": "facilities", "loss": (1, 2),
+        "effect": "facilities", "loss": (1, 3),
         "msg_private": "زلزال قوي ضرب منطقتك ودمّر بعض منشآتك!",
         "msg_channel": "سلسلة زلازل عنيفة تضرب منطقة القوقاز!",
     },
@@ -930,6 +1019,111 @@ def get_player_ranks(p, data):
     """يرجع قائمة الرتب التي حققها اللاعب"""
     return [r for r in RANKS if r["check"](p, data)]
 
+# ==================== نظام ترقية المدن ====================
+CITY_LEVELS = [
+    {
+        "level": 1, "name": "قرية",       "emoji": "🏚️",
+        "cost": 0, "infra_req": 0, "xp_req": 0,
+        "bonuses": {},
+        "desc": "بداية المسيرة",
+    },
+    {
+        "level": 2, "name": "بلدة",        "emoji": "🏘️",
+        "cost": 20000, "infra_req": 3, "xp_req": 500,
+        "bonuses": {"tax": 0.10, "army_cap": 500},
+        "desc": "+10% ضرائب | +500 حد جيش",
+    },
+    {
+        "level": 3, "name": "مدينة",       "emoji": "🏙️",
+        "cost": 80000, "infra_req": 8, "xp_req": 1500,
+        "bonuses": {"tax": 0.20, "army_cap": 2000, "farm": 0.10},
+        "desc": "+20% ضرائب | +2000 حد جيش | +10% مزارع",
+    },
+    {
+        "level": 4, "name": "عاصمة",      "emoji": "🏛️",
+        "cost": 250000, "infra_req": 15, "xp_req": 4000,
+        "bonuses": {"tax": 0.35, "army_cap": 5000, "farm": 0.20, "happiness": 10},
+        "desc": "+35% ضرائب | +5000 حد جيش | +20% مزارع | +10 رضا",
+    },
+    {
+        "level": 5, "name": "إمبراطورية", "emoji": "👑",
+        "cost": 1000000, "infra_req": 30, "xp_req": 12000,
+        "bonuses": {"tax": 0.50, "army_cap": 15000, "farm": 0.35, "happiness": 20, "all_income": 0.15},
+        "desc": "+50% ضرائب | +15000 حد جيش | +35% مزارع | +20 رضا | +15% كل الدخل",
+    },
+]
+
+def get_city_level(p):
+    city_lvl = p.get("city_level", 1)
+    return next((c for c in CITY_LEVELS if c["level"] == city_lvl), CITY_LEVELS[0])
+
+def get_city_bonuses(p):
+    city = get_city_level(p)
+    return city.get("bonuses", {})
+
+# ==================== نظام الشهرة ====================
+REPUTATION_LEVELS = [
+    {"min": -100, "max": -60, "label": "عدو اللدود",     "emoji": "💀", "color": "أحمر"},
+    {"min":  -60, "max": -30, "label": "خطر",             "emoji": "⚠️", "color": "برتقالي"},
+    {"min":  -30, "max": -10, "label": "مشبوه",           "emoji": "👁️", "color": "أصفر"},
+    {"min":  -10, "max":  10, "label": "محايد",           "emoji": "⚪", "color": "رمادي"},
+    {"min":   10, "max":  30, "label": "موثوق",           "emoji": "🤝", "color": "أخضر"},
+    {"min":   30, "max":  60, "label": "حليف موثوق",      "emoji": "🌟", "color": "أزرق"},
+    {"min":   60, "max": 100, "label": "حليف استراتيجي",  "emoji": "👑", "color": "ذهبي"},
+]
+
+def get_reputation_level(score):
+    score = max(-100, min(100, score))
+    for lvl in REPUTATION_LEVELS:
+        if lvl["min"] <= score < lvl["max"]:
+            return lvl
+    return REPUTATION_LEVELS[3]  # محايد افتراضي
+
+def update_reputation(data, actor_name, target_name, action, value):
+    """
+    يحدث شهرة actor عند target بناءً على الفعل
+    action: "attack","peace","alliance","colonize","liberate","aid","betray","spy_caught"
+    """
+    rep = data.setdefault("reputation", {})
+    # شهرة actor في نظر target
+    key = f"{actor_name}→{target_name}"
+    current = rep.get(key, 0)
+    rep[key] = max(-100, min(100, current + value))
+    data["reputation"] = rep
+
+def get_my_reputation(data, my_name):
+    """يرجع dict: {دولة: score} لكل الدول اللي عندهم رأي في اللاعب"""
+    rep = data.get("reputation", {})
+    result = {}
+    for key, score in rep.items():
+        actor, target = key.split("→", 1)
+        if actor == my_name:
+            result[target] = score
+    return result
+
+def get_global_reputation(data, my_name):
+    """يحسب متوسط الشهرة العامة"""
+    scores = get_my_reputation(data, my_name)
+    if not scores:
+        return 0
+    return round(sum(scores.values()) / len(scores))
+
+REPUTATION_ACTIONS = {
+    "attack":       -15,   # هجوم
+    "attack_win":   -20,   # انتصار في حرب
+    "occupy":       -35,   # احتلال
+    "colonize":     -25,   # استعمار
+    "nuke":         -50,   # قنبلة نووية
+    "bio":          -40,   # سلاح بيولوجي
+    "peace":        +15,   # معاهدة سلام
+    "liberate":     +30,   # تحرير دولة
+    "alliance":     +20,   # انضمام حلف مشترك
+    "aid":          +10,   # تحويل مالي
+    "protect":      +25,   # حماية دولة
+    "spy_caught":   -20,   # تجسس اكتشف
+    "betray":       -40,   # خيانة معاهدة/تحالف
+}
+
 def add_war_log(data, attacker_name, defender_name, result, attacker_loss, defender_loss, conquered=False):
     """يضيف سجل معركة"""
     entry = {
@@ -1265,6 +1459,7 @@ def load_data():
     d.setdefault("unoccupied_territories", {})  # مناطق فارغة مغزوة {region: {occupied_by, occupied_at}}
     d.setdefault("weapon_market", [])            # سوق الأسلحة بين اللاعبين
     d.setdefault("game_paused", False)           # إيقاف مؤقت للعبة
+    d.setdefault("reputation", {})               # شهرة الدول {actor→target: score}
     d.setdefault("pending_announcement", {})     # إعلانات معلقة
     d.setdefault("announcement_topic_id", 0)     # توبيك الإعلانات
     d.setdefault("banned_users", {})             # {uid: ban_until_timestamp}
@@ -1866,6 +2061,9 @@ async def do_harvest(app, uid, p, data):
     fac_banned   = p.get("bio_facility_ban", 0) > now
 
     # --- المزارع ---
+    season_name, season_info, season_fx = get_season_effects(region)
+    season_farm_mult = 1 + season_fx["farm_bonus"]
+    season_gold_mult = 1 + season_fx["gold_bonus"]
     if farm_banned:
         lines.append("  🌾 ☣️ *مزارعك متوقفة بسبب هجوم بيولوجي!*")
     else:
@@ -1874,6 +2072,8 @@ async def do_harvest(app, uid, p, data):
             amt_per = crops_amount.get(crop, fc.get("amount",10))
             if crop in preferred:
                 amt_per = int(amt_per * 1.5)
+            # تأثير الطقس على المزارع
+            amt_per = max(1, int(amt_per * season_farm_mult))
             qty         = amt_per * count
             price       = CROP_SELL_PRICE.get(crop, 20)
             earned      = qty * price
@@ -1909,7 +2109,11 @@ async def do_harvest(app, uid, p, data):
     min_farm       = 0.20 if cabinet.get("وزير_زراعة") else 0.0
     min_facility   = 0.15 if cabinet.get("وزير_تقنية") else 0.0
     # إجمالي مضاعف الدخل
-    total_income_bonus = solar_bonus + semi_bonus + space_bonus + ev_harvest + min_facility
+    city_bonuses       = get_city_bonuses(p)
+    city_tax_bonus     = city_bonuses.get("tax", 0)
+    city_farm_bonus    = city_bonuses.get("farm", 0)
+    city_all_bonus     = city_bonuses.get("all_income", 0)
+    total_income_bonus = solar_bonus + semi_bonus + space_bonus + ev_harvest + min_facility + city_all_bonus
 
     for res, count in facs.items():
         if res in ("ميناء_نفطي","طاقة_شمسية"): continue
@@ -2161,36 +2365,44 @@ def _apply_disaster_to_player(data, uid, d):
                 destroyed = max(0, int(cnt * pct))
                 data["players"][uid]["crops"][res] = max(0, cnt - destroyed)
                 if destroyed > 0:
-                    destroyed_list.append(f"{destroyed} {res}")
+                    destroyed_list.append(f"{destroyed} حقل {res}")
             loss_desc = "، ".join(destroyed_list[:3]) or "—"
 
-    # ===== تأثير السكان — كل كارثة تخفض السكان =====
+    # ===== تأثير السكان — فقط للكوارث ذات الصلة =====
     pop = p.get("population", 1_000_000)
     disaster_name = d.get("name", "")
-    # نسبة خفض السكان حسب نوع الكارثة
+    disaster_effect = d.get("effect", "")
+
+    # حدد لو الكارثة تأثر على السكان
+    AFFECTS_POPULATION = False
+    pop_loss_pct = 0
+
     if any(x in disaster_name for x in ["مجاعة","وباء","طاعون"]):
-        pop_loss_pct = random.uniform(0.04, 0.10)   # 4-10% — أشد تأثيراً
+        AFFECTS_POPULATION = True
+        pop_loss_pct = random.uniform(0.04, 0.10)   # 4-10%
     elif any(x in disaster_name for x in ["زلزال","فيضان","إعصار"]):
+        AFFECTS_POPULATION = True
         pop_loss_pct = random.uniform(0.02, 0.06)   # 2-6%
-    elif any(x in disaster_name for x in ["جفاف","جراد","عاصفة"]):
-        pop_loss_pct = random.uniform(0.01, 0.03)   # 1-3% — أقل تأثيراً
-    else:
-        pop_loss_pct = random.uniform(0.01, 0.02)   # 1-2% — افتراضي
-    pop_loss = max(10000, int(pop * pop_loss_pct))
-    new_pop   = max(100000, pop - pop_loss)
-    data["players"][uid]["population"] = new_pop
-    pop_loss_m = round(pop_loss / 1_000_000, 2)
-    if pop_loss >= 1_000_000:
-        pop_suffix = f" | 👥 -{pop_loss_m}M نسمة"
-    else:
-        pop_suffix = f" | 👥 -{pop_loss // 1000:,}K نسمة"
-    # لو الجيش تجاوز حد السكان الجديد — قلله
-    new_army_cap = get_army_cap_by_pop({"population": new_pop, "xp": p.get("xp",0)})
-    if data["players"][uid].get("army", 0) > new_army_cap:
-        data["players"][uid]["army"] = new_army_cap
+    elif any(x in disaster_name for x in ["جفاف","جراد","مجاعة"]) and disaster_effect in ("crops_all","crops_one"):
+        AFFECTS_POPULATION = True
+        pop_loss_pct = random.uniform(0.005, 0.015)  # 0.5-1.5% — أثر غير مباشر
+    # عفن الثمار وحريق المصانع والتضخم وعاصفة رملية → لا تأثر على السكان
+
+    if AFFECTS_POPULATION and pop_loss_pct > 0:
+        pop_loss = max(5000, int(pop * pop_loss_pct))
+        new_pop  = max(100000, pop - pop_loss)
+        data["players"][uid]["population"] = new_pop
+        if pop_loss >= 1_000_000:
+            pop_suffix = f" | 👥 -{round(pop_loss/1_000_000,2)}M نسمة"
+        else:
+            pop_suffix = f" | 👥 -{pop_loss // 1000:,}K نسمة"
+        new_army_cap = get_army_cap_by_pop({"population": new_pop, "xp": p.get("xp",0)})
+        if data["players"][uid].get("army", 0) > new_army_cap:
+            data["players"][uid]["army"] = new_army_cap
+        loss_desc = (loss_desc + pop_suffix) if loss_desc else pop_suffix.strip(" | ")
 
     data["players"][uid]["disasters_hit"] = p.get("disasters_hit", 0) + 1
-    return loss_desc + pop_suffix if loss_desc else pop_suffix.strip(" | ")
+    return loss_desc
 
 
 async def disaster_loop(app):
@@ -2932,8 +3144,184 @@ def _news_interview(data, pvs, stats):
     richest,poorest,strongest,weakest,biggest,advanced,at_war_list,occupied,orgs,total_gold,total_army,total_players,happy_data,most_unhappy,most_happy,hungry_states,revolting = stats
     sep = "─"*20
 
+    # ===== قاموس اللهجات حسب المنطقة =====
+    DIALECTS = {
+        # مصر
+        "مصر": {
+            "نعم": ["أيوه","أيوه والله","طبعاً","معلش أيوه"],
+            "لا": ["لأ","لأ بالراحة","ما إيش"],
+            "تعبير_رضا": ["تمام تمام","عال العال","زي الفل"],
+            "تعبير_رفض": ["بلاش","ما تسألش","دي مشكلة يعني"],
+            "تعبير_تهديد": ["خليك في حالك","ما تجرب","والنبي ما يعمل حاجة كويسة"],
+            "ختام": ["ربنا يستر","يا سيدي انت عارف","وبعدين خلاص"],
+        },
+        # السعودية والخليج
+        "السعودية": {
+            "نعم": ["إيه صح","والله صح","بالتأكيد"],
+            "لا": ["لا والله","ما يصير","أبداً"],
+            "تعبير_رضا": ["تمام والله","زين","ما شاء الله"],
+            "تعبير_رفض": ["ما يصير","هذا ما يصلح","لا يجي"],
+            "تعبير_تهديد": ["بكره تشوف","الله يهديك","روح اشتغل"],
+            "ختام": ["الله يوفق","في أمان الله","يالله"],
+        },
+        "الكويت": {
+            "نعم": ["إيه صح","ايه والله","صدق"],
+            "لا": ["لا والله","ما يصير","مو صح"],
+            "تعبير_رضا": ["زين","كويس","تمام"],
+            "تعبير_رفض": ["مو صح","ما يصلح","لا يجي"],
+            "تعبير_تهديد": ["بكره تشوف","الله يهديك"],
+            "ختام": ["الله يوفق","يالله"],
+        },
+        "قطر": {"نعم":["إيه"],"لا":["ما يصير"],"تعبير_رضا":["تمام"],"تعبير_رفض":["ما يصلح"],"تعبير_تهديد":["بكره تشوف"],"ختام":["الله يوفق"]},
+        "الامارات": {"نعم":["إيه صح"],"لا":["ما يصير"],"تعبير_رضا":["زين"],"تعبير_رفض":["ما يصلح"],"تعبير_تهديد":["بكره تشوف"],"ختام":["الله يوفق"]},
+        "عمان": {"نعم":["إيه"],"لا":["لا والله"],"تعبير_رضا":["تمام"],"تعبير_رفض":["ما يصلح"],"تعبير_تهديد":["الله يهديك"],"ختام":["في أمان الله"]},
+        "البحرين": {"نعم":["إيه"],"لا":["ما يصير"],"تعبير_رضا":["تمام"],"تعبير_رفض":["ما يصلح"],"تعبير_تهديد":["بكره تشوف"],"ختام":["الله يوفق"]},
+        # العراق
+        "العراق": {
+            "نعم": ["آني","وللاه","بلى"],
+            "لا": ["لا وللاه","ما يصير","أبداً"],
+            "تعبير_رضا": ["زين","مو بس زين — ممتاز","تمام"],
+            "تعبير_رفض": ["هاي مو صح","ما يصلح","لا يجي"],
+            "تعبير_تهديد": ["تروح تشوف","الله يهديك","بكره تعرف"],
+            "ختام": ["الله يوفق","يالله بيكم"],
+        },
+        # الشام
+        "سوريا": {
+            "نعم": ["آه","آه والله","طبعاً"],
+            "لا": ["لا","ما في","أبداً"],
+            "تعبير_رضا": ["منيح","كتير منيح","تمام"],
+            "تعبير_رفض": ["ما بدنا","ما رح يصير","بلا"],
+            "تعبير_تهديد": ["خلي بالك","بكرا تشوف","الله يهديك"],
+            "ختام": ["يسلمو","الله معك","يلا"],
+        },
+        "لبنان": {
+            "نعم": ["آه","بالتأكيد","طبعاً"],
+            "لا": ["لا","أبداً","no way"],
+            "تعبير_رضا": ["هيدا شي","كتير حلو","ما في أحسن"],
+            "تعبير_رفض": ["ما بدنا","يي لأ","impossible"],
+            "تعبير_تهديد": ["خلي بالك","بكرا تشوف","attention"],
+            "ختام": ["يعطيك العافية","الله معك","bye"],
+        },
+        "الاردن": {
+            "نعم": ["آه","والله آه","طبعاً"],
+            "لا": ["لا","ما في","أبداً"],
+            "تعبير_رضا": ["منيح","تمام","زبالة — بمعنى ممتاز"],
+            "تعبير_رفض": ["ما بدنا هيك","لأ"],
+            "تعبير_تهديد": ["خلي بالك","بكرا تشوف"],
+            "ختام": ["يسلمو","الله معك"],
+        },
+        "فلسطين": {"نعم":["آه","طبعاً"],"لا":["لا","أبداً"],"تعبير_رضا":["منيح"],"تعبير_رفض":["ما بدنا"],"تعبير_تهديد":["خلي بالك"],"ختام":["يسلمو"]},
+        # اليمن
+        "اليمن": {
+            "نعم": ["إيه","والله إيه","أيوه"],
+            "لا": ["لا","ما يصير","لاه"],
+            "تعبير_رضا": ["كويس","تمام","الحمد لله"],
+            "تعبير_رفض": ["ما يصلح","لا يجي","لاه"],
+            "تعبير_تهديد": ["بكره تشوف","الله يهديك"],
+            "ختام": ["الله يوفق","في أمان الله"],
+        },
+        # المغرب العربي
+        "المغرب": {
+            "نعم": ["واخا","ايه","صحيح"],
+            "لا": ["لا","ما كاينش","أبداً"],
+            "تعبير_رضا": ["مزيان","واخا واخا","كيف داير"],
+            "تعبير_رفض": ["ما كاينش","لا يصلح","سير"],
+            "تعبير_تهديد": ["غدا تشوف","الله يهديك"],
+            "ختام": ["بسلامة","الله يسهل","يالله"],
+        },
+        "الجزائر": {
+            "نعم": ["واه","صح","إيه"],
+            "لا": ["لا","ما عندناش","أبداً"],
+            "تعبير_رضا": ["مليح","واه واه","تمام"],
+            "تعبير_رفض": ["ما يصلحش","لا","سير"],
+            "تعبير_تهديد": ["غداً تشوف","الله يهديك"],
+            "ختام": ["بسلامة","الله يسهل"],
+        },
+        "تونس": {
+            "نعم": ["ايه","صح","توا"],
+            "لا": ["لا","ما فماش","أبداً"],
+            "تعبير_رضا": ["بارك","مليح"],
+            "تعبير_رفض": ["ما يصلحش","لا"],
+            "تعبير_تهديد": ["تحذر","الله يهديك"],
+            "ختام": ["بسلامة","الله يسهل"],
+        },
+        "ليبيا": {"نعم":["إيه"],"لا":["لا"],"تعبير_رضا":["تمام"],"تعبير_رفض":["ما يصلح"],"تعبير_تهديد":["بكره تشوف"],"ختام":["الله يوفق"]},
+        "موريتانيا": {"نعم":["إيه"],"لا":["لا"],"تعبير_رضا":["تمام"],"تعبير_رفض":["ما يصلح"],"تعبير_تهديد":["الله يهديك"],"ختام":["الله يوفق"]},
+        # أفريقيا
+        "الصومال": {
+            "نعم": ["haa","hadda","xaq ah"],
+            "لا": ["maya","ma aha","aad u xun"],
+            "تعبير_رضا": ["waa fiican","si fiican","haa waa run"],
+            "تعبير_رفض": ["maya","ma aha"],
+            "تعبير_تهديد": ["aad baad u xuntahay","ka fekerso"],
+            "ختام": ["Allaha naxariisto","nabadeey"],
+        },
+        "السودان": {
+            "نعم": ["آه","أيوه","وخير"],
+            "لا": ["لا","ما كدا","أبداً"],
+            "تعبير_رضا": ["تمام","كويس","ماشي"],
+            "تعبير_رفض": ["ما يجي كدا","لا"],
+            "تعبير_تهديد": ["بكره تشوف","الله يهديك"],
+            "ختام": ["الله يوفق","ماشي"],
+        },
+        # القرن الأفريقي — لهجات مختلطة
+        "الصومال": {
+            "نعم": ["إيه","والله إيه","أيوه"],
+            "لا": ["لا","ما يصير","لاه"],
+            "تعبير_رضا": ["كويس","تمام","الحمد لله"],
+            "تعبير_رفض": ["ما يصلح","لا يجي","لاه"],
+            "تعبير_تهديد": ["بكره تشوف","الله يهديك"],
+            "ختام": ["الله يوفق","في أمان الله"],
+        },
+        "جيبوتي": {
+            "نعم": ["إيه","والله إيه","أيوه"],
+            "لا": ["لا","ما يصير","لاه"],
+            "تعبير_رضا": ["كويس","تمام","الحمد لله"],
+            "تعبير_رفض": ["ما يصلح","لا يجي","لاه"],
+            "تعبير_تهديد": ["بكره تشوف","الله يهديك"],
+            "ختام": ["الله يوفق","في أمان الله"],
+        },
+        "ارتريا": {
+            "نعم": ["آه","أيوه","وخير"],
+            "لا": ["لا","ما كدا","أبداً"],
+            "تعبير_رضا": ["تمام","كويس","ماشي"],
+            "تعبير_رفض": ["ما يجي كدا","لا"],
+            "تعبير_تهديد": ["بكره تشوف","الله يهديك"],
+            "ختام": ["الله يوفق","ماشي"],
+        },
+        "تشاد": {
+            "نعم": ["آه","أيوه","وخير"],
+            "لا": ["لا","ما كدا","ما فيش"],
+            "تعبير_رضا": ["تمام","كويس","ماشي"],
+            "تعبير_رفض": ["ما يجي كدا","ما يصلح","لا"],
+            "تعبير_تهديد": ["بكره تشوف","الله يهديك","ما تجرب"],
+            "ختام": ["الله يوفق","ماشي","في أمان الله"],
+        },
+        # القوقاز وإيران وتركيا وقبرص — فصحى افتراضية
+    }
+
+    DEFAULT_DIALECT = {
+        "نعم": ["نعم","بالتأكيد","صحيح"],
+        "لا": ["لا","أبداً","كلا"],
+        "تعبير_رضا": ["الأمور جيدة","تمام","بخير"],
+        "تعبير_رفض": ["لن نقبل","غير مقبول","رفضنا واضح"],
+        "تعبير_تهديد": ["ستندمون","الأيام القادمة ستُجيب","نحذّر"],
+        "ختام": ["شكراً","الله يوفق","مع السلامة"],
+    }
+
+    def get_dialect(region):
+        return DIALECTS.get(region, DEFAULT_DIALECT)
+
+    def d_yes(region): return random.choice(get_dialect(region)["نعم"])
+    def d_no(region): return random.choice(get_dialect(region)["لا"])
+    def d_ok(region): return random.choice(get_dialect(region)["تعبير_رضا"])
+    def d_rej(region): return random.choice(get_dialect(region)["تعبير_رفض"])
+    def d_thr(region): return random.choice(get_dialect(region)["تعبير_تهديد"])
+    def d_end(region): return random.choice(get_dialect(region)["ختام"])
+
     # اختار شخصية للمقابلة
     subject = random.choice(pvs)
+    region  = subject.get("region", "")
     is_rich    = subject["country_name"] == richest["country_name"]
     is_poor    = subject["country_name"] == poorest["country_name"]
     is_strong  = subject["country_name"] == strongest["country_name"]
@@ -2948,34 +3336,34 @@ def _news_interview(data, pvs, stats):
 
     if is_rich:
         qa_pairs += [
-            ("❓ سر ثروتكم؟", f"*الممثل:* 'العمل الجاد والتوفيق... والجيران الضعاف 😅'"),
-            ("❓ كيف تشعر بامتلاك {CUR}{gold:,}؟".format(CUR=CUR, gold=subject['gold']), "*الممثل:* 'ثقيل على الكتف، لكن نتحمل'"),
+            ("❓ سر ثروتكم؟", f"*الممثل:* '{d_ok(region)}... العمل الجاد والتوفيق — والجيران الضعاف 😅'"),
+            (f"❓ كيف تشعر بامتلاك {CUR}{subject['gold']:,}؟", f"*الممثل:* '{d_yes(region)} ثقيل على الكتف، لكن نتحمل'"),
         ]
     if is_poor:
         qa_pairs += [
-            ("❓ ما خططكم الاقتصادية؟", f"*الممثل:* 'نعمل على... نعمل على... الأمر قيد الدراسة 📋'"),
-            ("❓ متى ستتحسن الأوضاع؟", "*الممثل:* 'قريباً إن شاء الله — وهذا وعد رسمي' 🤞"),
+            ("❓ ما خططكم الاقتصادية؟", f"*الممثل:* '{d_rej(region)}... نعمل على الأمر — قيد الدراسة 📋'"),
+            ("❓ متى ستتحسن الأوضاع؟", f"*الممثل:* 'قريباً — {d_end(region)} 🤞'"),
         ]
     if is_strong:
         qa_pairs += [
-            ("❓ لماذا هذا الجيش الضخم؟", f"*الممثل:* 'للدفاع فقط، والدفاع أحياناً يكون هجوماً' 😏"),
-            ("❓ هل تخطط للتوسع؟", "*الممثل:* 'كلمة توسع قاسية — نقول: نشر الاستقرار'"),
+            ("❓ لماذا هذا الجيش الضخم؟", f"*الممثل:* '{d_yes(region)} — للدفاع فقط... والدفاع أحياناً هجوم 😏'"),
+            ("❓ هل تخطط للتوسع؟", f"*الممثل:* '{d_rej(region)} كلمة توسع — نقول: نشر الاستقرار'"),
         ]
     if is_war:
         enemy = subject['at_war'][0] if subject.get('at_war') else "أحد"
         qa_pairs += [
-            (f"❓ ما موقفكم من الحرب مع {enemy}؟", f"*الممثل:* 'هم بدأوا — هذا موقفنا الثابت والنهائي'"),
-            ("❓ هل تفكرون في السلام؟", "*الممثل:* 'السلام جميل... بعد الانتصار 😤'"),
+            (f"❓ ما موقفكم من الحرب مع {enemy}؟", f"*الممثل:* '{d_thr(region)} — هم بدأوا، هذا موقفنا الثابت'"),
+            ("❓ هل تفكرون في السلام؟", f"*الممثل:* 'السلام جميل... بعد الانتصار! {d_thr(region)} 😤'"),
         ]
     if is_occ:
         qa_pairs += [
-            ("❓ كيف أوضاعكم في ظل الاحتلال؟", "*الممثل:* '...' _(صمت طويل)_"),
+            ("❓ كيف أوضاعكم في ظل الاحتلال؟", f"*الممثل:* '...' _(صمت)_ '{d_no(region)}'"),
         ]
     if not qa_pairs:
         qa_pairs = [
-            ("❓ كيف أحوالكم؟", f"*الممثل:* 'تمام، والحمد لله، وسائرون على الخطة'"),
-            ("❓ ما رأيكم في المنطقة؟", "*الممثل:* 'المنطقة فيها طاقات كبيرة... وتوترات أكبر 😬'"),
-            ("❓ رسالة للجيران؟", f"*الممثل:* 'السلام عليكم — وعليكم السلام' _(ابتسامة دبلوماسية)_"),
+            ("❓ كيف أحوالكم؟", f"*الممثل:* '{d_ok(region)}، {d_end(region)}'"),
+            ("❓ ما رأيكم في المنطقة؟", f"*الممثل:* 'فيها طاقات كبيرة... وتوترات أكبر 😬 — {d_thr(region)}'"),
+            ("❓ رسالة للجيران؟", f"*الممثل:* 'السلام عليكم — {d_end(region)}' _(ابتسامة دبلوماسية)_"),
         ]
 
     random.shuffle(qa_pairs)
@@ -2983,9 +3371,9 @@ def _news_interview(data, pvs, stats):
         news += f"{q}\n{a}\n\n"
 
     closings = [
-        "🎤 _'شكراً لممثل {name}... الذي غادر قبل انتهاء المقابلة'_".format(name=subject['country_name']),
+        f"🎤 _'شكراً لممثل {subject['country_name']}... الذي غادر قبل انتهاء المقابلة'_",
         "🎤 _'انتهت المقابلة فجأة بعد السؤال الأخير'_",
-        "🎤 _'الممثل رفض الإجابة على 4 أسئلة إضافية'_",
+        f"🎤 _'الممثل أنهى المقابلة بـ: {d_end(region)}'_",
     ]
     news += f"{sep}\n{random.choice(closings)}"
     return news
@@ -3408,6 +3796,8 @@ CONTROL_TOGGLES = {
     "festival_enabled":      {"label":"🎉 المهرجان الشعبي",        "cat":"اقتصاد"},
     # الدبلوماسية
     "alliances_enabled":     {"label":"🏛️ إنشاء الأحلاف",         "cat":"دبلوماسية"},
+    "alliance_rename_enabled":{"label":"✏️ تبديل اسم الحلف",       "cat":"دبلوماسية"},
+    "alliance_logo_enabled": {"label":"🖼️ شعار الحلف",             "cat":"دبلوماسية"},
     "peace_enabled":         {"label":"🕊️ معاهدات السلام",         "cat":"دبلوماسية"},
     "protection_enabled":    {"label":"🛡️ الحماية",               "cat":"دبلوماسية"},
     "colonize_enabled":      {"label":"🏴 الاستعمار",             "cat":"دبلوماسية"},
@@ -3569,6 +3959,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clean_old_requests(data)
     ntext = norm(text).lower()
 
+    # حفظ اسم التليجرام تلقائياً
+    if str(uid) in data.get("players", {}):
+        tg_name = update.effective_user.full_name or update.effective_user.first_name or "—"
+        tg_username = update.effective_user.username
+        data["players"][str(uid)]["tg_name"] = tg_name
+        if tg_username:
+            data["players"][str(uid)]["tg_username"] = f"@{tg_username}"
+
     # ======= تحديد التوبيك عشان الرد يروح في نفس المكان =======
     thread_id = getattr(update.message, "message_thread_id", None)
     context.user_data["thread_id"] = thread_id
@@ -3583,11 +3981,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "اضرب","استخدم","العاصمه","غزو","دمج","فصل","تحرير","اهدي","تجنيد",
         "هجوم","بيع","شراء","تعيين","اقاله","اقالة","اعلن","اعلان","معاهده",
         "معاهدة","تجسس","جاسوس","احمي","الغاء","تحويل","انشاء","دعوه","طرد",
-        "مغادره","حل","حلف","جيش","استعمر","احصد","ثوره","ثورة","انتفاضه",
+        "مغادره","حل","حلف","جيش","استعمر","تغيير","شعار","احصد","ثوره","ثورة","انتفاضه",
         "استقلال","مجلس","وزراء","وزارتي","الوزراء","مهرجان","ارضي","تحصين",
         "قبول","رفض","دولي","امبراطوريتي","اراضيي","ممتلكاتي","المتصدرين",
-        "الترتيب","قائمه","الدول","خريطه","الخريطه","بورصة","البورصة","الاسواق","محفظتي","محفظه","اسهمي","شراء اسهم","بيع اسهم",
-        "سجل","احداث","الحدث","البنك","بنك","قرض","ديوني","قروضي","ديون","سداد","خزنتي","خزيناتي","الخزنه","خزينتي","احصائياتي","إحصائياتي","سجلي","تاريخي","جيراني","جيران","حدودي","رتبتي","شاراتي","انجازاتي","لقبي","سجل","حروبي","معاركي",
+        "الترتيب","قائمه","الدول","خريطه","الخريطه","بورصه","البورصه","الاسواق","محفظتي","محفظه","اسهمي","شراء اسهم","بيع اسهم",
+        "سجل","احداث","الحدث","البنك","بنك","قرض","ديوني","قروضي","ديون","سداد","خزنتي","خزيناتي","الخزنه","خزينتي","احصائياتي","إحصائياتي","سجلي","تاريخي","جيراني","جيران","حدودي","رتبتي","شاراتي","انجازاتي","لقبي","سجل","حروبي","معاركي","شهرتي","سمعتي","الطقس","الفصل","موسم","ترقية","عاصمتي","بعث","ارسل",
         "مساعده","اوامر","help","cocg","المضائق","جيشي","قواتي","تسليحي","عتادي",
         "تعديل","غير","تحديث","علم","تعيين","اغلق","افتح","مضيق","نشره","نشرة","تغيير",
         "تفعيل","الغاء","احصائيات","إحصائيات","الاحلاف","قائمة","ادمن","admin",
@@ -3673,6 +4071,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "المتصدرين", "الترتيب",
         "قائمه الدول", "الدول",
         "المضائق", "حاله المضائق",
+        "بورصه", "البورصه", "بورصة", "البورصة", "الاسواق", "اسواق", "سوق مالي",
+        "محفظتي", "محفظه", "محفظة", "اسهمي",
+        "شراء اسهم", "بيع اسهم", "شراء أسهم", "بيع أسهم",
+        "خزنتي", "خزيناتي", "خزينتي",
+        "احصائياتي", "إحصائياتي", "رتبتي",
+        "سجل حروبي", "حروبي", "معاركي",
+        "مجلس الوزراء", "وزراء", "وزارتي",
+        "جيران", "جيراني",
+        "اضرار", "الاضرار",
     }
     if chat_type == "private" and not is_admin(uid) and ntext not in PRIVATE_ALLOWED:
         await update.message.reply_text(
@@ -3965,7 +4372,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "merged_regions": [], "population": 1_000_000,
                 "portfolio": {}, "last_market_trade": 0,
                 "last_ghazw": 0, "occ_last_harvest": 0,
-                "harvest_reminded": 0, "ban_until": 0,
+                "harvest_reminded": 0, "ban_until": 0, "city_level": 1,
                 "cabinet": {}, "war_log": [],
             }
             save_data(data)
@@ -5189,6 +5596,50 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ======= العاصمة =======
+    # ======= ترقية عاصمتي =======
+    if ntext in ["ترقية عاصمتي","ترقيه عاصمتي","طور عاصمتي","عاصمتي","مدينتي"]:
+        p = get_player(data, uid)
+        if not p: await update.message.reply_text("❌ مش مسجل."); return
+        ok, err = check_sovereignty(p, "ترقية")
+        if not ok: await update.message.reply_text(err, parse_mode="Markdown"); return
+        current = get_city_level(p)
+        next_idx = current["level"]
+        if next_idx >= len(CITY_LEVELS):
+            await update.message.reply_text(
+                f"👑 *عاصمتك وصلت أعلى مستوى!*\n{sep()}\n"
+                f"{current['emoji']} {p.get('capital','العاصمة')} — {current['name']}\n"
+                f"_{current['desc']}_", parse_mode="Markdown"); return
+        nxt = CITY_LEVELS[next_idx]
+        infra = p.get("infrastructure", 0)
+        xp    = p.get("xp", 0)
+        gold  = p.get("gold", 0)
+        checks = []
+        ok_infra = infra >= nxt["infra_req"]
+        ok_xp    = xp    >= nxt["xp_req"]
+        ok_gold  = gold  >= nxt["cost"]
+        checks.append(f"{'✅' if ok_infra else '❌'} بنية تحتية Lv.{nxt['infra_req']} (عندك Lv.{infra})")
+        checks.append(f"{'✅' if ok_xp    else '❌'} {nxt['xp_req']:,} XP (عندك {xp:,})")
+        checks.append(f"{'✅' if ok_gold  else '❌'} {nxt['cost']:,}¥ (عندك {gold:,}¥)")
+        can_upgrade = ok_infra and ok_xp and ok_gold
+        msg = (
+            f"{box_title(current['emoji'], p.get('capital','العاصمة'))}\n\n"
+            f"المستوى الحالي: *{current['name']}* {current['emoji']}\n"
+            f"_{current['desc']}_\n{sep()}\n"
+            f"الترقية القادمة: *{nxt['name']}* {nxt['emoji']}\n"
+            f"_{nxt['desc']}_\n{sep()}\n"
+            + "\n".join(checks)
+        )
+        if can_upgrade:
+            kbd = InlineKeyboardMarkup([[
+                InlineKeyboardButton(f"⬆️ ترقية لـ {nxt['name']} ({nxt['cost']:,}¥)", callback_data=f"city_upgrade_{next_idx}"),
+                InlineKeyboardButton("❌ إلغاء", callback_data="cancel"),
+            ]])
+            sent = await update.message.reply_text(msg, reply_markup=kbd, parse_mode="Markdown")
+            register_msg(sent, uid)
+        else:
+            await update.message.reply_text(msg, parse_mode="Markdown")
+        return
+
     if ntext.startswith("العاصمه "):
         p = get_player(data, uid)
         if not p: await update.message.reply_text("❌ مش مسجل."); return
@@ -5199,7 +5650,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ======= تغيير اسم الدولة =======
-    if ntext.startswith("تغيير اسم دولتي ") or ntext.startswith("تغيير اسم "):
+    if (ntext.startswith("تغيير اسم دولتي ") or ntext.startswith("تغيير اسم ")) \
+            :
         p = get_player(data, uid)
         if not p: await update.message.reply_text("❌ مش مسجل."); return
         ok, err = check_sovereignty(p, "تغيير الاسم")
@@ -5642,6 +6094,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: pass
         save_data(data)
         status_word = "الاستعمار" if is_colony else "الاحتلال"
+        # شهرة إيجابية للتحرير
+        for other_uid, other_p in data["players"].items():
+            if other_uid == str(uid): continue
+            update_reputation(data, my_name, other_p["country_name"], "liberate", REPUTATION_ACTIONS["liberate"])
         await update.message.reply_text(
             f"🕊️ *تم التحرير!*\n{sep()}\n"
             f"حررت *{original_name}* من {status_word}\n"
@@ -6216,6 +6672,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 log_event(data, f"⚔️ {p['country_name']} انتصرت على {tp['country_name']}", "🏆")
             add_war_log(data, p["country_name"], tp["country_name"], "win", la, ld, conquered)
+            # تحديث الشهرة — الهجوم يضر بشهرة المهاجم عند الكل
+            for other_uid, other_p in data["players"].items():
+                if other_uid in (str(uid), tuid): continue
+                update_reputation(data, p["country_name"], other_p["country_name"],
+                    "occupy" if conquered else "attack_win",
+                    REPUTATION_ACTIONS["occupy"] if conquered else REPUTATION_ACTIONS["attack_win"])
             save_data(data)
             # فحص رتب جديدة
             new_ranks = get_player_ranks(data["players"][str(uid)], data)
@@ -6517,6 +6979,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown")
         return
 
+    # ======= الطقس والفصل الحالي =======
+    if ntext in ["الطقس","الفصل","طقس","موسم","الموسم"]:
+        p = get_player(data, uid)
+        region = p["region"] if p else ""
+        season_name, season_info, season_fx = get_season_effects(region)
+        farm_b = season_fx["farm_bonus"]
+        army_p = season_fx["army_penalty"]
+        gold_b = season_fx["gold_bonus"]
+
+        def pct(v): return f"+{int(v*100)}%" if v >= 0 else f"{int(v*100)}%"
+
+        msg = (
+            f"{box_title(season_info['emoji'], f'الفصل الحالي — {season_name}')}\n\n"
+            f"_{season_info['desc']}_\n{sep()}\n"
+            f"🌾 إنتاج المزارع: *{pct(farm_b)}*\n"
+            f"⚔️ قوة الجيش: *{pct(-army_p)}*\n"
+            f"💰 الدخل التجاري: *{pct(gold_b)}*\n"
+        )
+        if region:
+            msg += f"\n🗺️ تأثير منطقتك *{region}* مُطبَّق"
+        # الفصل القادم
+        months_map = {3:"مارس",4:"أبريل",5:"مايو",6:"يونيو",7:"يوليو",8:"أغسطس",9:"سبتمبر",10:"أكتوبر",11:"نوفمبر",12:"ديسمبر",1:"يناير",2:"فبراير"}
+        next_seasons = {"ربيع":"صيف","صيف":"خريف","خريف":"شتاء","شتاء":"ربيع"}
+        next_s = next_seasons[season_name]
+        next_info = SEASONS[next_s]
+        msg += f"\n{sep()}\n💡 الفصل القادم: {next_info['emoji']} *{next_s}* ({months_map[next_info['months'][0]]})"
+        await safe_md(update.message, msg)
+        return
+
     # ======= الحدث العالمي الحالي =======
     if ntext in ["الحدث العالمي","حدث عالمي","العالم"]:
         ev    = data.get("world_event")
@@ -6538,6 +7029,55 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"*التأثيرات:*\n{''.join(chr(10)+l for l in eff_lines)}\n\n"
             f"⏱️ ينتهي بعد: *{h}h {m}m*",
             parse_mode="Markdown")
+        return
+
+    # ======= شهرتي =======
+    if ntext in ["شهرتي","سمعتي","الطقس","الفصل","موسم","ترقية","عاصمتي","بعث","ارسل","الشهرة","سمعة دولتي"]:
+        p = get_player(data, uid)
+        if not p: await update.message.reply_text("❌ مش مسجل."); return
+        my_name = p["country_name"].replace(" (محتلة)","").replace(" (مستعمرة)","")
+        scores  = get_my_reputation(data, my_name)
+        global_score = get_global_reputation(data, my_name)
+        global_lvl   = get_reputation_level(global_score)
+
+        if not scores:
+            await update.message.reply_text(
+                f"{box_title('🌟','شهرتك الدولية')}\n\n"
+                f"⚪ لم تُسجَّل لك شهرة بعد!\n"
+                f"💡 تفاعل مع الدول — حارب، سالم، وتحالف.", parse_mode="Markdown"); return
+
+        # صنّف الدول
+        allies   = [(n,s) for n,s in scores.items() if s >= 30]
+        neutral  = [(n,s) for n,s in scores.items() if -10 <= s < 30]
+        enemies  = [(n,s) for n,s in scores.items() if s < -10]
+
+        allies.sort(key=lambda x: -x[1])
+        enemies.sort(key=lambda x: x[1])
+
+        msg = (
+            f"{box_title('🌟','شهرتك الدولية')}\n\n"
+            f"{global_lvl['emoji']} *الشهرة العامة:* {global_lvl['label']} ({global_score:+d})\n"
+            f"{sep()}\n"
+        )
+        if allies:
+            msg += f"🤝 *حلفاء ومؤيدون ({len(allies)}):*\n"
+            for n, s in allies[:5]:
+                lvl = get_reputation_level(s)
+                msg += f"  {lvl['emoji']} {n}: {s:+d}\n"
+        if neutral:
+            msg += f"\n⚪ *محايدون ({len(neutral)}):*\n"
+            for n, s in list(neutral)[:3]:
+                msg += f"  ⚪ {n}: {s:+d}\n"
+            if len(neutral) > 3:
+                msg += f"  _...و{len(neutral)-3} آخرين_\n"
+        if enemies:
+            msg += f"\n⚠️ *أعداء ({len(enemies)}):*\n"
+            for n, s in enemies[:5]:
+                lvl = get_reputation_level(s)
+                msg += f"  {lvl['emoji']} {n}: {s:+d}\n"
+
+        msg += f"\n{sep()}\n💡 الشهرة تتأثر بـ: الحروب، السلام، التحرير، التجسس"
+        await safe_md(update.message, msg)
         return
 
     # ======= رتبتي وشاراتي =======
@@ -7381,6 +7921,67 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode="Markdown")
         return
 
+    # ======= الجاسوسية المتقدمة =======
+    if ntext.startswith("بعث جاسوس ") or ntext.startswith("ارسل جاسوس "):
+        if not data.get("spy_enabled", True) and not is_admin(uid):
+            await update.message.reply_text("🚫 *التجسس موقوف حالياً.*", parse_mode="Markdown"); return
+        p = get_player(data, uid)
+        if not p: await update.message.reply_text("❌ مش مسجل."); return
+        if get_level(p.get("xp",0))["level"] < 5:
+            await update.message.reply_text("🔒 الجاسوسية المتقدمة تتطلب مستوى *5*.", parse_mode="Markdown"); return
+        ok, err = check_sovereignty(p, "تجسس")
+        if not ok: await update.message.reply_text(err, parse_mode="Markdown"); return
+
+        tname = ntext.replace("بعث جاسوس","").replace("ارسل جاسوس","").strip()
+        tuid, tp = find_by_name(data, tname)
+        if not tp:
+            await update.message.reply_text(f"❌ مش لاقي دولة '{tname}'."); return
+        if tuid == str(uid):
+            await update.message.reply_text("❌ ما تتجسسش على نفسك!"); return
+
+        tp_clean = tp["country_name"].replace(" (محتلة)","").replace(" (مستعمرة)","")
+
+        SPY_MISSIONS = {
+            "سرقة_خطط":   {"label":"🗺️ سرقة الخطط العسكرية", "cost":8000,  "min_lvl":5,  "success":0.55, "desc":"تكشف تفاصيل جيش العدو ومنشآته"},
+            "سرقة_ذهب":   {"label":"💰 سرقة من الخزينة",     "cost":12000, "min_lvl":5,  "success":0.45, "desc":"تسرق 5-15% من ذهب العدو"},
+            "اغتيال_وزير":{"label":"🔪 اغتيال وزير",          "cost":20000, "min_lvl":7,  "success":0.35, "desc":"تقتل وزيراً عشوائياً وتعطل مجلسه"},
+            "تخريب_منشاة":{"label":"💣 تخريب منشأة",          "cost":15000, "min_lvl":6,  "success":0.40, "desc":"تخرب منشأة بدون كشف هويتك"},
+            "زرع_عميل":   {"label":"🕵️ زرع عميل",             "cost":25000, "min_lvl":8,  "success":0.30, "desc":"عميل دائم يبعث معلومات كل حصاد"},
+        }
+
+        current_lvl = get_level(p.get("xp",0))["level"]
+        kbd = []
+        row = []
+        for mid, minfo in SPY_MISSIONS.items():
+            if current_lvl < minfo["min_lvl"]: continue
+            if p["gold"] < minfo["cost"]: continue
+            row.append(InlineKeyboardButton(
+                f"{minfo['label']} {minfo['cost']:,}¥",
+                callback_data=f"spy_mission_{mid}_{tuid}"))
+            if len(row) == 1: kbd.append(row); row = []
+        if row: kbd.append(row)
+        kbd.append([InlineKeyboardButton("❌ إلغاء", callback_data="cancel")])
+
+        if not [b for b in kbd if b[0].callback_data != "cancel"]:
+            await update.message.reply_text(
+                f"❌ لا توجد مهام متاحة!\n"
+                f"إما المستوى غير كافٍ أو الذهب أقل من المطلوب.", parse_mode="Markdown"); return
+
+        lines = []
+        for mid, minfo in SPY_MISSIONS.items():
+            lock = "🔒 " if current_lvl < minfo["min_lvl"] else ""
+            no_gold = "💸 " if p["gold"] < minfo["cost"] else ""
+            lines.append(f"{lock}{no_gold}{minfo['label']}\n  _{minfo['desc']}_ — {minfo['cost']:,}¥ | نجاح: {int(minfo['success']*100)}%")
+
+        sent = await update.message.reply_text(
+            f"{box_title('🕵️','بعثة تجسس')}\n\n"
+            f"الهدف: *{tp_clean}*\n{sep()}\n"
+            + "\n".join(lines) +
+            f"\n{sep()}\nاختر المهمة:",
+            reply_markup=InlineKeyboardMarkup(kbd), parse_mode="Markdown")
+        register_msg(sent, uid)
+        return
+
     # ======= تجسس محسّن =======
     if ntext.startswith("تجسس علي ") or ntext.startswith("جاسوس علي "):
         if not data.get("spy_enabled", True) and not is_admin(uid):
@@ -7806,7 +8407,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("🚫 *إنشاء الأحلاف موقوف حالياً.*", parse_mode="Markdown"); return
         p = get_player(data, uid)
         if not p: await update.message.reply_text("❌ مش مسجل."); return
-        org_name = ntext.replace("انشاء حلف","").replace("إنشاء حلف","").strip()
+        org_name = text.strip(); 
+        for _p in ["انشاء حلف ","إنشاء حلف "]: 
+            if org_name.startswith(_p): org_name = org_name[len(_p):].strip(); break
         if not org_name:
             await update.message.reply_text("❌ لازم تكتب اسم الحلف.\n مثال: `انشاء حلف حلف الشمال`", parse_mode="Markdown"); return
         if len(org_name) > 30:
@@ -7841,15 +8444,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ntext.startswith("دعوه "):
         p = get_player(data, uid)
         if not p: await update.message.reply_text("❌ مش مسجل."); return
-        rest = ntext.replace("دعوه","",1).strip()
-        # البحث عن أطول اسم حلف يطابق البداية
-        orgs     = data.get("organizations", {})
+        rest_raw = text.strip()
+        for prefix in ["دعوة ","دعوه "]:
+            if rest_raw.startswith(prefix):
+                rest_raw = rest_raw[len(prefix):].strip(); break
+        orgs = data.get("organizations", {})
         matched_org  = None
         matched_country = None
         for org_name in sorted(orgs.keys(), key=len, reverse=True):
-            if rest.startswith(org_name):
+            if norm(rest_raw).startswith(norm(org_name)):
                 matched_org     = org_name
-                matched_country = rest[len(org_name):].strip()
+                matched_country = rest_raw[len(org_name):].strip()
                 break
         if not matched_org or not matched_country:
             await update.message.reply_text(
@@ -7904,14 +8509,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ntext.startswith("طرد من حلف "):
         p = get_player(data, uid)
         if not p: await update.message.reply_text("❌ مش مسجل."); return
-        rest = ntext.replace("طرد من حلف","",1).strip()
+        rest_raw = text.strip()
+        for prefix in ["طرد من حلف ","طرد من حلف"]:
+            if rest_raw.startswith(prefix):
+                rest_raw = rest_raw[len(prefix):].strip(); break
         orgs = data.get("organizations", {})
         matched_org = None
         matched_country = None
+        # ابحث بـ norm() عشان يتعامل مع أسماء الأحلاف الإنجليزية والعربية
         for org_name in sorted(orgs.keys(), key=len, reverse=True):
-            if rest.startswith(org_name):
+            if norm(rest_raw).startswith(norm(org_name)):
                 matched_org     = org_name
-                matched_country = rest[len(org_name):].strip()
+                matched_country = rest_raw[len(org_name):].strip()
                 break
         if not matched_org or not matched_country:
             await update.message.reply_text("❌ الصيغة:\n`طرد من حلف [اسم الحلف] [اسم الدولة]`", parse_mode="Markdown"); return
@@ -7920,15 +8529,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ فقط المؤسس يقدر يطرد."); return
         if matched_country == p["country_name"]:
             await update.message.reply_text("❌ مينفعش تطرد نفسك! استخدم `حل حلف [اسم]` لحل الحلف."); return
-        if matched_country not in org["members"]:
+        # ابحث عن العضو بـ norm()
+        member_match = next((m for m in org["members"] if norm(m) == norm(matched_country)), None)
+        if not member_match:
             await update.message.reply_text(f"❌ *{matched_country}* مش عضو في الحلف.", parse_mode="Markdown"); return
-        data["organizations"][matched_org]["members"].remove(matched_country)
+        data["organizations"][matched_org]["members"].remove(member_match)
         save_data(data)
         await update.message.reply_text(
-            f"🚪 *تم الطرد!*\n{sep()}\n*{matched_country}* طُرد من حلف *{matched_org}*.",
+            f"🚪 *تم الطرد!*\n{sep()}\n*{member_match}* طُرد من حلف *{matched_org}*.",
             parse_mode="Markdown")
-        # إبلاغ المطرود
-        tuid, tp = find_by_name(data, matched_country)
+        tuid, tp = find_by_name(data, member_match)
         if tp:
             try:
                 await context.bot.send_message(chat_id=int(tuid),
@@ -7941,7 +8551,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ntext.startswith("مغادره حلف "):
         p = get_player(data, uid)
         if not p: await update.message.reply_text("❌ مش مسجل."); return
-        org_name = ntext.replace("مغادره حلف","",1).strip()
+        org_name = text.strip();
+        for _p in ["مغادرة حلف ","مغادره حلف "]: 
+            if org_name.startswith(_p): org_name = org_name[len(_p):].strip(); break
         orgs = data.get("organizations", {})
         if org_name not in orgs:
             await update.message.reply_text(f"❌ مش لاقي حلف اسمه *{org_name}*.", parse_mode="Markdown"); return
@@ -7961,7 +8573,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ntext.startswith("حل حلف "):
         p = get_player(data, uid)
         if not p: await update.message.reply_text("❌ مش مسجل."); return
-        org_name = ntext.replace("حل حلف","",1).strip()
+        org_name = text.strip();
+        for _p in ["حل حلف "]: 
+            if org_name.startswith(_p): org_name = org_name[len(_p):].strip(); break
         orgs = data.get("organizations", {})
         if org_name not in orgs:
             await update.message.reply_text(f"❌ مش لاقي حلف *{org_name}*.", parse_mode="Markdown"); return
@@ -8005,11 +8619,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ======= تفاصيل حلف =======
     if ntext.startswith("حلف "):
-        org_name = ntext.replace("حلف","",1).strip()
+        org_name_raw = text.strip()
+        for _p in ["حلف "]: 
+            if org_name_raw.startswith(_p): org_name_raw = org_name_raw[len(_p):].strip(); break
         orgs = data.get("organizations", {})
-        if org_name not in orgs:
-            await update.message.reply_text(f"❌ مش لاقي حلف اسمه *{org_name}*.", parse_mode="Markdown"); return
-        org = orgs[org_name]
+        # ابحث بـ norm()
+        matched_org = next((k for k in orgs if norm(k) == norm(org_name_raw)), None)
+        if not matched_org:
+            await update.message.reply_text(f"❌ مش لاقي حلف اسمه *{org_name_raw}*.", parse_mode="Markdown"); return
+        org = orgs[matched_org]
         p   = get_player(data, uid)
         is_member  = p and p["country_name"] in org["members"]
         is_founder = p and p["country_name"] == org["founder"]
@@ -8020,17 +8638,117 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         created = time.strftime("%Y/%m/%d", time.localtime(org["created_at"]))
         actions = ""
         if is_founder:
-            actions = f"\n{sep()}\n🔧 *أوامرك كمؤسس:*\n`دعوة {org_name} [اسم الدولة]`\n`طرد من حلف {org_name} [اسم]`\n`حل حلف {org_name}`"
+            actions = (f"\n{sep()}\n🔧 *أوامرك كمؤسس:*\n"
+                      f"`دعوة {matched_org} [اسم الدولة]`\n"
+                      f"`طرد من حلف {matched_org} [اسم]`\n"
+                      f"`تغيير اسم حلف {matched_org} [الاسم الجديد]`\n"
+                      f"`شعار حلف {matched_org}` ← ارفق صورة\n"
+                      f"`حل حلف {matched_org}`")
         elif is_member:
-            actions = f"\n{sep()}\n🚪 `مغادرة حلف {org_name}`"
+            actions = f"\n{sep()}\n🚪 `مغادرة حلف {matched_org}`"
         msg = (
-            f"{box_title('🏛️', org_name)}\n"
+            f"{box_title('🏛️', matched_org)}\n"
             f"👑 المؤسس: *{org['founder']}*\n"
             f"📅 التأسيس: {created}\n"
             f"👥 الأعضاء ({len(org['members'])}):\n{members_lines}"
             f"{actions}"
         )
-        await safe_md(update.message, msg)
+        # لو في شعار نبعت صورة
+        logo_path = os.path.join(FLAGS_DIR, f"org_{matched_org}.png")
+        if os.path.exists(logo_path):
+            try:
+                with open(logo_path, "rb") as f_logo:
+                    await update.message.reply_photo(photo=f_logo, caption=msg, parse_mode="Markdown")
+            except:
+                await safe_md(update.message, msg)
+        else:
+            await safe_md(update.message, msg)
+        return
+
+    # ======= تغيير اسم الحلف =======
+    if ntext.startswith("تبديل اسم حلف ") or ntext.startswith("تبديل حلف "):
+        if not data.get("alliance_rename_enabled", True) and not is_admin(uid):
+            await update.message.reply_text("🚫 *تبديل اسم الحلف موقوف حالياً.*", parse_mode="Markdown"); return
+        p = get_player(data, uid)
+        if not p: await update.message.reply_text("❌ مش مسجل."); return
+        new_name = text.strip()
+        for _p in ["تبديل اسم حلف ","تبديل حلف "]:
+            if new_name.startswith(_p): new_name = new_name[len(_p):].strip(); break
+        if not new_name:
+            await update.message.reply_text("❌ الصيغة: `تبديل اسم حلف [الاسم الجديد]`", parse_mode="Markdown"); return
+        orgs = data.get("organizations", {})
+        # ابحث عن الحلف اللي الشخص ده مؤسسه
+        matched_org = next((k for k,v in orgs.items() if v["founder"] == p["country_name"]), None)
+        if not matched_org:
+            await update.message.reply_text("❌ أنت مش مؤسس أي حلف."); return
+        if len(new_name) < 2 or len(new_name) > 30:
+            await update.message.reply_text("❌ الاسم لازم يكون بين 2 و30 حرف."); return
+        if new_name in orgs:
+            await update.message.reply_text(f"❌ في حلف اسمه *{new_name}* بالفعل!", parse_mode="Markdown"); return
+        old_name = matched_org
+        orgs[new_name] = orgs.pop(old_name)
+        data["organizations"] = orgs
+        # غير الشعار لو موجود
+        old_logo = os.path.join(FLAGS_DIR, f"org_{old_name}.png")
+        new_logo = os.path.join(FLAGS_DIR, f"org_{new_name}.png")
+        if os.path.exists(old_logo):
+            try: os.rename(old_logo, new_logo)
+            except: pass
+        save_data(data)
+        await update.message.reply_text(
+            f"✅ *تم تغيير اسم الحلف!*\n{sep()}\n"
+            f"القديم: *{old_name}*\nالجديد: *{new_name}*",
+            parse_mode="Markdown")
+        for member in orgs[new_name]["members"]:
+            muid, mp = find_by_name(data, member)
+            if muid and muid != str(uid):
+                try:
+                    await context.bot.send_message(chat_id=int(muid),
+                        text=f"📢 *تم تغيير اسم حلفك!*\n{sep()}\n*{old_name}* → *{new_name}*",
+                        parse_mode="Markdown")
+                except: pass
+        return
+
+    # ======= شعار الحلف =======
+    if (ntext.startswith("شعار حلف ") or ntext.startswith("شعار_حلف ")) and (update.message.photo or update.message.document):
+        if not data.get("alliance_logo_enabled", True) and not is_admin(uid):
+            await update.message.reply_text("🚫 *رفع شعار الحلف موقوف حالياً.*", parse_mode="Markdown"); return
+        p = get_player(data, uid)
+        if not p: await update.message.reply_text("❌ مش مسجل."); return
+        rest_raw = text.strip()
+        for _p in ["شعار حلف ","شعار_حلف "]:
+            if rest_raw.startswith(_p): rest_raw = rest_raw[len(_p):].strip(); break
+        orgs = data.get("organizations", {})
+        matched_org = next((k for k in orgs if norm(k) == norm(rest_raw)), None)
+        if not matched_org:
+            # جرب caption
+            cap = (update.message.caption or "").strip()
+            for _p in ["شعار حلف ","شعار_حلف "]:
+                if cap.startswith(_p): cap = cap[len(_p):].strip(); break
+            matched_org = next((k for k in orgs if norm(k) == norm(cap)), None)
+        if not matched_org:
+            await update.message.reply_text("❌ الصيغة: ارفق صورة مع caption: `شعار حلف [اسم الحلف]`", parse_mode="Markdown"); return
+        org = orgs[matched_org]
+        if org["founder"] != p["country_name"]:
+            await update.message.reply_text("❌ فقط المؤسس يقدر يضيف الشعار."); return
+        # حفظ الصورة
+        try:
+            if update.message.photo:
+                file_id = update.message.photo[-1].file_id
+            else:
+                file_id = update.message.document.file_id
+            file    = await context.bot.get_file(file_id)
+            f_bytes = await file.download_as_bytearray()
+            img = Image.open(io.BytesIO(f_bytes)).convert("RGBA")
+            img = img.resize((256, 256), Image.LANCZOS)
+            logo_path = os.path.join(FLAGS_DIR, f"org_{matched_org}.png")
+            img.save(logo_path)
+            await update.message.reply_text(
+                f"🏛️ *تم رفع شعار حلف {matched_org}!*\n"
+                f"سيظهر عند كتابة `حلف {matched_org}` ✅",
+                parse_mode="Markdown")
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطأ في حفظ الشعار: {e}")
         return
 
     # ======= جيش الحلف — تشكيل الجيش الموحد =======
@@ -8459,6 +9177,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• مضائقهم لا تؤثر عليهم\n\n"
             f"*الهجوم الجماعي:* `هجوم جماعي [حلف] علي [دولة]`\n"
             f"• للمؤسس فقط | الغنيمة توزع بالتساوي\n\n"
+            f"*إدارة الحلف (للمؤسس فقط):*\n"
+            f"• `تبديل اسم حلف [الاسم الجديد]`\n"
+            f"• `شعار حلف [اسم]` ← ارفق صورة\n"
+            f"• `طرد من حلف [حلف] [دولة]`\n"
+            f"• `حل حلف [اسم]`\n\n"
             f"*حماية دولة:* `احمي [دولة]` — Lv.7+\n"
             f"*معاهدة سلام:* `معاهدة سلام مع [دولة]` — 5,000¥ | 24 ساعة",
             parse_mode="Markdown")
@@ -8564,6 +9287,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"`قائمة الاحلاف` | `حلف [اسم]` | `جيش الحلف [اسم]`\n"
             f"`هجوم جماعي [حلف] علي [دولة]` — للمؤسس\n"
             f"`مغادره حلف [اسم]` | `طرد من حلف [حلف] [دولة]`\n"
+            f"`تبديل اسم حلف [الاسم الجديد]` — للمؤسس\n"
+            f"`شعار حلف [اسم]` ← ارفق صورة — للمؤسس\n"
             f"`حل حلف [اسم]`\n\n"
             f"{sep()}\n"
             f"{wars_status}\n"
@@ -8801,6 +9526,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"); return
 
         # اختبار النشرة الإخبارية
+        if ntext in ["اللاعبين","قائمة اللاعبين","كل اللاعبين","players"]:
+            players = data.get("players", {})
+            if not players:
+                await update.message.reply_text("❌ لا يوجد لاعبين بعد."); return
+            await update.message.reply_text("⏳ جاري جلب بيانات اللاعبين...", parse_mode="Markdown")
+            lines = []
+            for puid, pp in sorted(players.items(), key=lambda x: x[1].get("country_name","")):
+                cname  = pp.get("country_name", "—")
+                region = pp.get("region", "—")
+                status = ""
+                if pp.get("occupied_by"):   status = " 🏴"
+                elif pp.get("colony_of"):   status = " ⛓️"
+                elif pp.get("frozen"):      status = " 🧊"
+                elif pp.get("ban_until",0) > time.time(): status = " 🔨"
+                # جيب اسم التليجرام
+                tg_name = "—"
+                try:
+                    chat = await context.bot.get_chat(int(puid))
+                    tg_name = chat.full_name or chat.username or "—"
+                    if chat.username:
+                        tg_name = f"@{chat.username}"
+                except: pass
+                lines.append(f"• `{puid}` | {tg_name}\n  🏳️ *{cname}*{status} — {region}")
+            # قسّم على رسائل
+            chunk = []
+            msgs  = []
+            for l in lines:
+                chunk.append(l)
+                if len(chunk) >= 15:
+                    msgs.append(chunk); chunk = []
+            if chunk: msgs.append(chunk)
+            header = f"{box_title('👥','اللاعبين')} ({len(players)})\n\n"
+            for i, msg_lines in enumerate(msgs):
+                txt = (header if i == 0 else "") + "\n".join(msg_lines)
+                await update.message.reply_text(txt, parse_mode="Markdown")
+            return
+
         if ntext in ["احصائيات الان","احصائيات_يومية","stats now"]:
             players_now = data.get("players", {})
             if not players_now:
@@ -9548,7 +10310,134 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
 
-    if query.data == "repair_all":
+    # ======= cancel =======
+    if query.data == "cancel":
+        await query.edit_message_text("❌ تم الإلغاء."); return
+
+    # ======= ترقية المدينة =======
+    if query.data.startswith("city_upgrade_"):
+        if not p: await query.edit_message_text("❌ مش مسجل."); return
+        try: target_lvl = int(query.data.replace("city_upgrade_",""))
+        except: await query.edit_message_text("❌ خطأ."); return
+        if target_lvl >= len(CITY_LEVELS):
+            await query.edit_message_text("❌ المستوى غير موجود."); return
+        nxt   = CITY_LEVELS[target_lvl]
+        infra = p.get("infrastructure", 0)
+        xp    = p.get("xp", 0)
+        gold  = p.get("gold", 0)
+        if infra < nxt["infra_req"] or xp < nxt["xp_req"] or gold < nxt["cost"]:
+            await query.edit_message_text("❌ الشروط غير مكتملة!"); return
+        data["players"][str(uid)]["gold"]       -= nxt["cost"]
+        data["players"][str(uid)]["city_level"]  = nxt["level"]
+        add_xp(data, uid, 500)
+        log_event(data, f"{p['country_name']} طورت عاصمتها إلى {nxt['name']}", nxt["emoji"])
+        save_data(data)
+        await query.edit_message_text(
+            f"{nxt['emoji']} *ترقية العاصمة!*\n{sep()}\n"
+            f"*{p.get('capital','العاصمة')}* أصبحت *{nxt['name']}*!\n"
+            f"_{nxt['desc']}_\n"
+            f"💸 -{nxt['cost']:,}¥ | ⭐ +500 XP",
+            parse_mode="Markdown")
+        return
+
+    # ======= spy_mission =======
+    if query.data.startswith("spy_mission_"):
+        parts = query.data.replace("spy_mission_","").rsplit("_",1)
+        if len(parts) < 2: await query.edit_message_text("❌ خطأ."); return
+        mission_id, tuid_s = parts[0], parts[1]
+        if not p: await query.edit_message_text("❌ مش مسجل."); return
+        tp = data["players"].get(tuid_s)
+        if not tp: await query.edit_message_text("❌ الدولة لم تعد موجودة."); return
+        SPY_MISSIONS = {
+            "سرقة_خطط":    {"label":"🗺️ سرقة الخطط",    "cost":8000,  "success":0.55},
+            "سرقة_ذهب":    {"label":"💰 سرقة الخزينة",   "cost":12000, "success":0.45},
+            "اغتيال_وزير": {"label":"🔪 اغتيال وزير",     "cost":20000, "success":0.35},
+            "تخريب_منشاة": {"label":"💣 تخريب منشأة",     "cost":15000, "success":0.40},
+            "زرع_عميل":    {"label":"🕵️ زرع عميل",        "cost":25000, "success":0.30},
+        }
+        m = SPY_MISSIONS.get(mission_id)
+        if not m: await query.edit_message_text("❌ مهمة غير موجودة."); return
+        if p["gold"] < m["cost"]:
+            await query.edit_message_text(f"❌ تحتاج {m['cost']:,}¥. عندك {p['gold']:,}¥."); return
+        data["players"][str(uid)]["gold"] -= m["cost"]
+        tp_name = tp["country_name"].replace(" (محتلة)","").replace(" (مستعمرة)","")
+        space_bonus = 0.25 if tp.get("facilities",{}).get("محطة_فضائيه",0) > 0 else 0
+        success_chance = max(0.10, m["success"] - space_bonus)
+        success = random.random() < success_chance
+        result_msg = ""
+        if success:
+            if mission_id == "سرقة_خطط":
+                army  = tp.get("army", 0)
+                gold  = tp.get("gold", 0)
+                facs  = ", ".join(f"{k}×{v}" for k,v in tp.get("facilities",{}).items()) or "—"
+                infra = tp.get("infrastructure", 0)
+                result_msg = (f"🗺️ *خطط {tp_name}:*\n⚔️ الجيش: {army:,}\n"
+                              f"💰 الخزينة: ~{gold:,}¥\n🏭 المنشآت: {facs}\n🏗️ البنية: Lv.{infra}")
+            elif mission_id == "سرقة_ذهب":
+                pct    = random.uniform(0.05, 0.15)
+                stolen = max(500, int(tp.get("gold",0) * pct))
+                stolen = min(stolen, tp.get("gold",0))
+                data["players"][tuid_s]["gold"] = max(0, tp["gold"] - stolen)
+                data["players"][str(uid)]["gold"] += stolen
+                result_msg = f"💰 سرقت *{stolen:,}¥* من خزينة {tp_name}!"
+            elif mission_id == "اغتيال_وزير":
+                cabinet = tp.get("cabinet", {})
+                filled  = [(k,v) for k,v in cabinet.items() if v]
+                if filled:
+                    pos, name = random.choice(filled)
+                    data["players"][tuid_s]["cabinet"].pop(pos, None)
+                    result_msg = f"🔪 اغتلت *{name}* — {pos} في {tp_name}!"
+                    try:
+                        await context.bot.send_message(chat_id=int(tuid_s),
+                            text=f"⚠️ *وزيرك اغتيل!*\n{sep()}\n*{name}* اغتيل من جواسيس مجهولين!\nمنصب {pos} شاغر الآن.",
+                            parse_mode="Markdown")
+                    except: pass
+                else:
+                    result_msg = "🔪 لا يوجد وزراء للاغتيال — المهمة فشلت!"
+            elif mission_id == "تخريب_منشاة":
+                facs = {k:v for k,v in tp.get("facilities",{}).items() if v > 0}
+                if facs:
+                    target_fac = random.choice(list(facs.keys()))
+                    loss = random.randint(1, min(2, facs[target_fac]))
+                    data["players"][tuid_s].setdefault("disaster_damage",{})[target_fac] = \
+                        data["players"][tuid_s].get("disaster_damage",{}).get(target_fac,0) + loss
+                    fc_name = RESOURCE_FACILITIES.get(target_fac,{}).get("name", target_fac)
+                    result_msg = f"💣 خربت *{loss}× {fc_name}* في {tp_name}!"
+                    try:
+                        await context.bot.send_message(chat_id=int(tuid_s),
+                            text=f"💣 *تخريب!*\n{sep()}\nجواسيس خربوا {loss}× {fc_name}!\nاكتب `اضرار` للإصلاح.",
+                            parse_mode="Markdown")
+                    except: pass
+                else:
+                    result_msg = "💣 لا توجد منشآت للتخريب!"
+            elif mission_id == "زرع_عميل":
+                agents = data["players"][str(uid)].setdefault("agents", {})
+                agents[tp_name] = {"planted_at": time.time(), "last_report": 0}
+                result_msg = f"🕵️ عميل زُرع في {tp_name}!\nستتلقى تقارير دورية عن أحوالهم."
+            add_xp(data, uid, 150)
+            save_data(data)
+            await query.edit_message_text(
+                f"✅ *المهمة نجحت!*\n{sep()}\n{result_msg}\n⭐ +150 XP",
+                parse_mode="Markdown")
+        else:
+            caught = random.random() < 0.40
+            save_data(data)
+            if caught:
+                update_reputation(data, p["country_name"], tp_name, "spy_caught", REPUTATION_ACTIONS["spy_caught"])
+                save_data(data)
+                try:
+                    await context.bot.send_message(chat_id=int(tuid_s),
+                        text=f"🚨 *تم القبض على جاسوس!*\n{sep()}\nجاسوس من *{p['country_name']}* اعتُقل!",
+                        parse_mode="Markdown")
+                except: pass
+                await query.edit_message_text(
+                    f"❌ *المهمة فشلت — الجاسوس اعتُقل!*\n{sep()}\n"
+                    f"شهرتك عند {tp_name} تضررت!\n💸 خسرت {m['cost']:,}¥", parse_mode="Markdown")
+            else:
+                await query.edit_message_text(
+                    f"❌ *المهمة فشلت — الجاسوس عاد سالماً*\n{sep()}\n💸 خسرت {m['cost']:,}¥",
+                    parse_mode="Markdown")
+        return
         if not p: await query.edit_message_text("❌ مش مسجل."); return
         damage_log = p.get("disaster_damage", {})
         damages = {k: v for k, v in damage_log.items() if not k.startswith("_") and v > 0}
@@ -10083,6 +10972,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data["players"][str(uid)]["war_declared"] = [
                 x for x in tp2_for_peace.get("war_declared",[]) if norm(x) != norm(from_name)]
         del data["peace_requests"][req_key]
+        # شهرة إيجابية لكلا الطرفين
+        for other_uid, other_p in data["players"].items():
+            if other_uid in (from_uid, str(uid)): continue
+            update_reputation(data, from_name, other_p["country_name"], "peace", REPUTATION_ACTIONS["peace"])
+            update_reputation(data, to_name,   other_p["country_name"], "peace", REPUTATION_ACTIONS["peace"])
         save_data(data)
         await query.edit_message_text(
             f"🕊️ *قبلت معاهدة السلام!*\n{sep()}\n"
@@ -10181,4 +11075,4 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    main(
