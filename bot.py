@@ -1799,6 +1799,7 @@ def calc_estimated_income(p, data):
     min_farm    = 0.20 if cabinet.get("وزير_زراعة") else 0.0
     min_fac     = 0.15 if cabinet.get("وزير_تقنية") else 0.0
     total_bonus = solar_bonus + semi_bonus + space_bonus + ev_harvest + min_fac
+    damage_log_e = {k: v for k, v in p.get("disaster_damage", {}).items() if not k.startswith("_")}
     total = 0
     for crop, count in crops_p.items():
         fc = FARM_CROPS.get(crop, {})
@@ -1808,8 +1809,11 @@ def calc_estimated_income(p, data):
         total += amt * count * CROP_SELL_PRICE.get(crop, 20)
     for res, count in facs.items():
         if res in ("ميناء_نفطي", "طاقة_شمسية"): continue
+        damaged = damage_log_e.get(res, 0)
+        effective = max(0, count - damaged)
+        if effective == 0: continue
         fc = RESOURCE_FACILITIES.get(res, {})
-        qty = fc.get("amount", 2) * count
+        qty = fc.get("amount", 2) * effective
         price = CROP_SELL_PRICE.get(res, 400)
         earned = qty * price
         if res in ("نفط", "غاز"): earned = int(earned * (1 + oil_bonus))
@@ -1879,7 +1883,7 @@ async def do_harvest(app, uid, p, data):
 
     # --- المنشآت الصناعية ---
     facs = p.get("facilities",{})
-    # حساب مضاعفات المنشآت الخاصة
+    damage_log = {k: v for k, v in p.get("disaster_damage", {}).items() if not k.startswith("_")}  # وحدات متضررة
     oil_ports      = facs.get("ميناء_نفطي", 0)
     oil_bonus      = min(0.60, oil_ports * 0.20)
     solar          = facs.get("طاقة_شمسية", 0)
@@ -1909,11 +1913,20 @@ async def do_harvest(app, uid, p, data):
 
     for res, count in facs.items():
         if res in ("ميناء_نفطي","طاقة_شمسية"): continue
-        if fac_banned and res not in ("ذهب",):  # الذهب مش بيتأثر
+        if fac_banned and res not in ("ذهب",):
             lines.append(f"  ☣️ {RESOURCE_FACILITIES.get(res,{}).get('emoji','🏭')} {res} متوقف (هجوم بيولوجي)")
             continue
+        # طرح الوحدات المتضررة من الإنتاج
+        damaged = damage_log.get(res, 0)
+        effective_count = max(0, count - damaged)
+        if effective_count == 0:
+            if damaged > 0:
+                lines.append(f"  🔴 {RESOURCE_FACILITIES.get(res,{}).get('emoji','🏭')} {res} ×{count} — متضرر كلياً! اكتب `اضرار` للإصلاح")
+            continue
+        if damaged > 0:
+            lines.append(f"  ⚠️ {RESOURCE_FACILITIES.get(res,{}).get('emoji','🏭')} {res}: {damaged} وحدة متضررة من أصل {count}")
         fc     = RESOURCE_FACILITIES.get(res,{})
-        qty    = fc.get("amount",2) * count
+        qty    = fc.get("amount",2) * effective_count
         price  = CROP_SELL_PRICE.get(res, 400)
         earned = qty * price
         # ميناء نفطي يرفع دخل النفط والغاز
@@ -2120,11 +2133,13 @@ def _apply_disaster_to_player(data, uid, d):
                 available = {k: v for k, v in facs.items() if v > 0}
             res  = random.choice(list(available.keys()))
             loss = random.randint(1, min(int(d["loss"][1]), available[res]))
-            data["players"][uid]["facilities"][res] = max(0, facs[res] - loss)
-            if data["players"][uid]["facilities"][res] == 0:
-                del data["players"][uid]["facilities"][res]
             fc_name = RESOURCE_FACILITIES.get(res, {}).get("name", res)
             loss_desc = f"{loss} × {fc_name}"
+            # تسجيل الضرر — المنشأة تفضل موجودة لكن إنتاجها موقوف
+            damage_log = data["players"][uid].setdefault("disaster_damage", {})
+            damage_log[res] = damage_log.get(res, 0) + loss
+            damage_log["_last_disaster"] = d.get("name", "كارثة")
+            # لا نحذف من facilities — الإنتاج بيوقف في do_harvest
 
     elif d["effect"] == "crops_one":
         crops = {k: v for k, v in p.get("crops", {}).items() if v > 0}
@@ -3327,7 +3342,15 @@ async def stock_market_loop(app):
                 await asyncio.sleep(60 * 10); continue
             data = load_data()
             ev_effects = get_world_event_effects(data)
-            BASE_PRICES = {"نفط":100, "قمح":40, "حديد":60, "غاز":80, "ذهب":150}
+            BASE_PRICES = {"نفط":500, "غاز":400, "صلب":350, "قمح":20, "ذهب":800}
+            # تأكد من وجود كل الموارد في stock_market
+            for res, base in BASE_PRICES.items():
+                if res not in data["stock_market"]:
+                    data["stock_market"][res] = {"price": base, "trend": 0, "history": [base], "pct_change": 0}
+            # احذف موارد قديمة مش موجودة
+            for res in list(data["stock_market"].keys()):
+                if res not in BASE_PRICES:
+                    del data["stock_market"][res]
             for res, info in data["stock_market"].items():
                 old_price = info["price"]
                 # تغيير عشوائي ±15% مع momentum
@@ -3337,7 +3360,7 @@ async def stock_market_loop(app):
                 ev_mult = ev_effects.get(f"stock_{res}", 1.0)
                 new_price = int(old_price * (1 + change) * ev_mult)
                 base = BASE_PRICES.get(res, 100)
-                new_price = max(int(base * 0.25), min(int(base * 4.0), new_price))
+                new_price = max(int(base * 0.50), min(int(base * 2.0), new_price))
                 new_trend = 1 if new_price > old_price else (-1 if new_price < old_price else 0)
                 # احتفظ بآخر 8 أسعار للرسم البياني
                 history = info.get("history", [old_price])
@@ -3366,26 +3389,34 @@ CONTROL_TOGGLES = {
     "ghazw_enabled":         {"label":"🏴 غزو المناطق",           "cat":"حروب"},
     "nuke_enabled":          {"label":"☢️ الأسلحة النووية",        "cat":"حروب"},
     "bio_enabled":           {"label":"☣️ الأسلحة البيولوجية",     "cat":"حروب"},
+    "recruitment_enabled":   {"label":"🪖 التجنيد",               "cat":"حروب"},
     # البناء
     "build_farm_enabled":    {"label":"🌾 بناء مزرعة",            "cat":"بناء"},
+    "complex_farm_enabled":  {"label":"🏗️ مجمع المزارع (×15)",    "cat":"بناء"},
     "build_facility_enabled":{"label":"🏗️ بناء منشأة",            "cat":"بناء"},
     "build_infra_enabled":   {"label":"⚙️ بناء بنية تحتية",       "cat":"بناء"},
     "build_fleet_enabled":   {"label":"⚓ بناء أسطول",            "cat":"بناء"},
     "buy_weapons_enabled":   {"label":"🔫 شراء أسلحة",            "cat":"بناء"},
+    "repair_enabled":        {"label":"🔧 إصلاح الكوارث",         "cat":"بناء"},
+    "fortify_enabled":       {"label":"🛡️ التحصين",               "cat":"بناء"},
     # الاقتصاد
     "harvest_enabled":       {"label":"💰 جمع الضرائب",           "cat":"اقتصاد"},
+    "harvest_doli_enabled":  {"label":"🌍 احصد دولي",             "cat":"اقتصاد"},
     "market_enabled":        {"label":"📈 البورصة",               "cat":"اقتصاد"},
     "loans_enabled":         {"label":"🏦 القروض",                "cat":"اقتصاد"},
     "transfer_enabled":      {"label":"💸 التحويل المالي",         "cat":"اقتصاد"},
+    "festival_enabled":      {"label":"🎉 المهرجان الشعبي",        "cat":"اقتصاد"},
     # الدبلوماسية
     "alliances_enabled":     {"label":"🏛️ إنشاء الأحلاف",         "cat":"دبلوماسية"},
     "peace_enabled":         {"label":"🕊️ معاهدات السلام",         "cat":"دبلوماسية"},
     "protection_enabled":    {"label":"🛡️ الحماية",               "cat":"دبلوماسية"},
     "colonize_enabled":      {"label":"🏴 الاستعمار",             "cat":"دبلوماسية"},
+    "straits_enabled":       {"label":"⚓ التحكم في المضائق",     "cat":"دبلوماسية"},
     # اللاعبين
     "registration_enabled":  {"label":"👤 التسجيل (انضم)",        "cat":"لاعبين"},
     "revolution_enabled":    {"label":"✊ الثورة والاستقلال",      "cat":"لاعبين"},
     "spy_enabled":           {"label":"🕵️ التجسس",               "cat":"لاعبين"},
+    "cabinet_enabled":       {"label":"🏛️ مجلس الوزراء",          "cat":"لاعبين"},
     # تلقائي
     "disasters_enabled":     {"label":"🌪️ الكوارث التلقائية",     "cat":"تلقائي"},
     "news_enabled":          {"label":"📰 النشرة الإخبارية",       "cat":"تلقائي"},
@@ -4330,6 +4361,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         register_msg(sent, uid)
         return
 
+    # ======= بناء مجمع مزارع (15 مزرعة دفعة واحدة) =======
+    COMPLEX_COUNT = 15
+    if ntext in ["بناء مجمع مزارع","بناء مجمع_مزارع","مجمع مزارع","مجمع_مزارع"]:
+        if (not data.get("complex_farm_enabled", True) or not data.get("build_farm_enabled", True)) and not is_admin(uid):
+            await update.message.reply_text("🚫 *بناء المزارع موقوف حالياً.*", parse_mode="Markdown"); return
+        p = get_player(data, uid)
+        if not p: await update.message.reply_text("❌ مش مسجل."); return
+        ok, err = check_sovereignty(p, "بناء مزرعة")
+        if not ok: await update.message.reply_text(err, parse_mode="Markdown"); return
+        region      = p["region"]
+        infra       = p.get("infrastructure", 0)
+        merged_regs = p.get("merged_regions", [])
+        preferred   = list(REGION_PREFERRED_CROPS.get(region, []))
+        for mr in merged_regs:
+            for crop in REGION_PREFERRED_CROPS.get(mr, []):
+                if crop not in preferred: preferred.append(crop)
+        max_farms   = get_max_farms(infra, region, merged_regs)
+        total_farms = sum(p.get("crops",{}).values())
+        remaining   = max_farms - total_farms
+        if remaining < COMPLEX_COUNT:
+            await update.message.reply_text(
+                f"❌ مش عندك مساحة كافية!\n"
+                f"المتاح: *{remaining}* مزرعة فقط (تحتاج {COMPLEX_COUNT})\n"
+                f"💡 ابن بنية تحتية أعلى لزيادة الحد.", parse_mode="Markdown"); return
+        sorted_c = preferred + [c for c in ALL_CROPS if c not in preferred]
+        kbd = []
+        row = []
+        for crop in sorted_c:
+            fc        = FARM_CROPS[crop]
+            unit_cost = get_farm_cost(data, crop)
+            total_cost = unit_cost * COMPLEX_COUNT
+            star      = "⭐" if crop in preferred else ""
+            row.append(InlineKeyboardButton(
+                f"{fc['emoji']}{star}{crop} {total_cost:,}¥",
+                callback_data=f"farm_complex_{crop}"))
+            if len(row) == 2: kbd.append(row); row = []
+        if row: kbd.append(row)
+        kbd.append([InlineKeyboardButton("❌ إلغاء", callback_data="cancel")])
+        sent = await update.message.reply_text(
+            f"🏗️ *مجمع المزارع — {COMPLEX_COUNT} مزرعة دفعة واحدة*\n{sep()}\n"
+            f"🌾 مزارعك: *{total_farms}/{max_farms}*\n"
+            f"⭐ أنسب لمنطقتك: {', '.join(preferred) or '—'}\n\n"
+            f"اختر المحصول:",
+            reply_markup=InlineKeyboardMarkup(kbd), parse_mode="Markdown")
+        register_msg(sent, uid)
+        return
+
     # ======= بناء مزرعة =======
     if ntext in ["بناء مزرعه","ابني مزرعه","انشئ مزرعه"]:
         if not data.get("build_farm_enabled", True) and not is_admin(uid):
@@ -4422,6 +4500,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ======= حصاد مستعمرة =======
     # ======= احصد دولي — يحصد دولتك + كل المستعمرات + المحتلات =======
     if ntext in ["احصد دولي","حصاد دولي","احصد كل شي","احصد الكل"]:
+        if not data.get("harvest_doli_enabled", True) and not is_admin(uid):
+            await update.message.reply_text("🚫 *احصد دولي موقوف حالياً.*", parse_mode="Markdown"); return
         if not data.get("harvest_enabled", True) and not is_admin(uid):
             await update.message.reply_text("🚫 *جمع الضرائب موقوف حالياً.*", parse_mode="Markdown"); return
         p = get_player(data, uid)
@@ -4637,7 +4717,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ======= شراء أسلحة =======
-    if ntext.startswith("شراء "):
+    if ntext.startswith("شراء ") and not ntext.startswith("شراء اسهم") and not ntext.startswith("شراء أسهم") and not ntext.startswith("شراء موارد"):
         if not data.get("buy_weapons_enabled", True) and not is_admin(uid) and any(w in ntext for w in ["سلاح","اسلحه","اسلحة","قنبلة","صاروخ","دبابة","طائرة"]):
             await update.message.reply_text("🚫 *شراء الأسلحة موقوف حالياً.*", parse_mode="Markdown"); return
         if ntext == "شراء اسلحه":
@@ -5215,6 +5295,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for action in ["اغلق","افتح"]:
         if ntext.startswith(f"{action} مضيق "):
+            if not data.get("straits_enabled", True) and not is_admin(uid):
+                await update.message.reply_text("🚫 *التحكم في المضائق موقوف حالياً.*", parse_mode="Markdown"); return
             p = get_player(data, uid)
             if not p: await update.message.reply_text("❌ مش مسجل."); return
             sname = ntext.replace(f"{action} مضيق","").strip()
@@ -6344,7 +6426,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if time.time() - last_trade < 120:
             rem = int(120 - (time.time() - last_trade))
             await update.message.reply_text(f"⏳ *انتظر {rem} ثانية* قبل التداول مجدداً.", parse_mode="Markdown"); return
-        is_sell = ntext.startswith("بيع")
+        is_sell = ntext.startswith("بيع اسهم") or ntext.startswith("بيع أسهم") or ntext.startswith("بيع موارد")
         parts   = ntext.split()
         if len(parts) < 3:
             await update.message.reply_text(
@@ -6952,10 +7034,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     if ntext in ["مجلس الوزراء","وزراء","وزارتي","الوزراء"]:
+        if not data.get("cabinet_enabled", True) and not is_admin(uid):
+            await update.message.reply_text("🚫 *مجلس الوزراء موقوف حالياً.*", parse_mode="Markdown"); return
         p = get_player(data, uid)
         if not p: await update.message.reply_text("❌ مش مسجل."); return
         cabinet = p.get("cabinet", {})
-        slots   = min(3 + p.get("infrastructure",0)//3, 5)  # 3-5 مناصب حسب البنية
+        slots = len(MINISTERS_LIST)  # كل المناصب متاحة، حد التعيين حسب البنية
+        max_appointed = min(3 + p.get("infrastructure",0)//3, len(MINISTERS_LIST))  # عدد المعيّنين المسموح
         lines   = []
         for mid, minfo in MINISTERS_LIST.items():
             holder = cabinet.get(mid)
@@ -6967,7 +7052,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{sep()}\n"
             f"💡 `تعيين [منصب] [اسم المسؤول]` — تعيين وزير\n"
             f"💡 `اقالة [منصب]` — إقالة وزير\n"
-            f"📊 مناصب متاحة: {slots} (تزيد مع البنية التحتية)",
+            f"📊 معيّنون: {len([v for v in cabinet.values() if v])}/{max_appointed} (تزيد مع البنية التحتية)",
             parse_mode="Markdown")
         return
 
@@ -6984,10 +7069,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mid = next((k for k in MINISTERS_LIST if norm(k) == norm(mid_input)), None)
         if not mid:
             await update.message.reply_text(f"❌ منصب '{mid_input}' غير موجود.\nالمناصب: " + "، ".join(MINISTERS_LIST.keys())); return
-        slots = min(3 + p.get("infrastructure",0)//3, 5)
+        slots = len(MINISTERS_LIST)
+        max_appointed = min(3 + p.get("infrastructure",0)//3, len(MINISTERS_LIST))
         cabinet = p.get("cabinet", {})
-        if len([v for v in cabinet.values() if v]) >= slots:
-            await update.message.reply_text(f"❌ وصلت للحد الأقصى ({slots} وزراء). أقل واحد أولاً بـ `اقالة [منصب]`."); return
+        current_count = len([v for v in cabinet.values() if v])
+        if current_count >= max_appointed:
+            await update.message.reply_text(
+                f"❌ وصلت للحد الأقصى ({max_appointed} وزير/محافظ).\n"
+                f"ابن بنية تحتية أعلى لزيادة الحد أو أقل واحد بـ `اقالة [منصب]`.",
+                parse_mode="Markdown"); return
         cost = 2000
         if p["gold"] < cost:
             await update.message.reply_text(f"❌ تعيين وزير يكلف {CUR}{cost:,}."); return
@@ -7025,6 +7115,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ======= مهرجان شعبي / رفع الرضا =======
     if ntext in ["مهرجان شعبي", "مهرجان", "ارضي الشعب", "رضا الشعب"]:
+        if not data.get("festival_enabled", True) and not is_admin(uid):
+            await update.message.reply_text("🚫 *المهرجان الشعبي موقوف حالياً.*", parse_mode="Markdown"); return
         p = get_player(data, uid)
         if not p: await update.message.reply_text("❌ مش مسجل."); return
         happy_now = calc_happiness(p)
@@ -7183,6 +7275,78 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
     # ======= تجسس =======
+    # ======= تقرير الأضرار =======
+    if ntext in ["اضرار","الاضرار","تقرير الاضرار","اضرار الكوارث"]:
+        if not data.get("repair_enabled", True) and not is_admin(uid):
+            await update.message.reply_text("🚫 *نظام الإصلاح موقوف حالياً.*", parse_mode="Markdown"); return
+        p = get_player(data, uid)
+        if not p: await update.message.reply_text("❌ مش مسجل."); return
+        damage_log = p.get("disaster_damage", {})
+        # احذف الـ metadata
+        damages = {k: v for k, v in damage_log.items() if not k.startswith("_") and v > 0}
+        if not damages:
+            await update.message.reply_text(
+                f"{box_title('🔧','تقرير الأضرار')}\n\n"
+                f"✅ لا يوجد أضرار مسجلة!\nمنشآتك بخير 🏗️",
+                parse_mode="Markdown"); return
+        last_dis = damage_log.get("_last_disaster", "كوارث متعددة")
+        lines = []
+        total_cost = 0
+        for res, qty in damages.items():
+            fc = RESOURCE_FACILITIES.get(res, {})
+            fc_name = fc.get("name", res)
+            fc_emoji = fc.get("emoji", "🏭")
+            repair_cost = int(fc.get("base_cost", 30000) * qty * 0.6)
+            total_cost += repair_cost
+            lines.append(f"  {fc_emoji} {fc_name}: -{qty} وحدة | إصلاح: {CUR}{repair_cost:,}")
+        kbd = InlineKeyboardMarkup([[
+            InlineKeyboardButton(f"🔧 إصلاح الكل ({CUR}{total_cost:,})", callback_data="repair_all"),
+            InlineKeyboardButton("❌ لاحقاً", callback_data="cancel"),
+        ]])
+        msg = (
+            f"{box_title('⚠️','تقرير الأضرار')}\n\n"
+            f"💥 آخر كارثة: *{last_dis}*\n{sep()}\n"
+            + "\n".join(lines) +
+            f"\n{sep()}\n"
+            f"💰 تكلفة الإصلاح الكاملة: *{CUR}{total_cost:,}*\n"
+            f"💵 رصيدك: *{CUR}{p['gold']:,}*"
+        )
+        sent = await update.message.reply_text(msg, reply_markup=kbd, parse_mode="Markdown")
+        register_msg(sent, uid)
+        return
+
+    # ======= اصلاح منشأة معينة =======
+    if ntext.startswith("اصلح ") or ntext.startswith("إصلاح "):
+        p = get_player(data, uid)
+        if not p: await update.message.reply_text("❌ مش مسجل."); return
+        damage_log = p.get("disaster_damage", {})
+        damages = {k: v for k, v in damage_log.items() if not k.startswith("_") and v > 0}
+        if not damages:
+            await update.message.reply_text("✅ مفيش أضرار تحتاج إصلاح!"); return
+        target = ntext.replace("اصلح","").replace("إصلاح","").strip()
+        matched = next((k for k in damages if norm(RESOURCE_FACILITIES.get(k,{}).get("name",k)) == norm(target) or norm(k) == norm(target)), None)
+        if not matched:
+            await update.message.reply_text(
+                f"❌ مش لاقي منشأة اسمها '{target}' في الأضرار.\n"
+                f"اكتب `اضرار` لعرض قائمة الأضرار."); return
+        fc = RESOURCE_FACILITIES.get(matched, {})
+        qty = damages[matched]
+        repair_cost = int(fc.get("base_cost", 30000) * qty * 0.6)
+        if p["gold"] < repair_cost:
+            await update.message.reply_text(
+                f"❌ تحتاج *{CUR}{repair_cost:,}* للإصلاح. عندك {CUR}{p['gold']:,}.",
+                parse_mode="Markdown"); return
+        data["players"][str(uid)]["gold"] -= repair_cost
+        data["players"][str(uid)]["facilities"][matched] = p.get("facilities",{}).get(matched, 0) + qty
+        data["players"][str(uid)]["disaster_damage"].pop(matched, None)
+        save_data(data)
+        await update.message.reply_text(
+            f"🔧 *تم الإصلاح!*\n{sep()}\n"
+            f"{fc.get('emoji','🏭')} {fc.get('name', matched)}: +{qty} وحدة\n"
+            f"💸 -{CUR}{repair_cost:,}\n"
+            f"💰 رصيدك: {CUR}{p['gold']-repair_cost:,}",
+            parse_mode="Markdown"); return
+
     # ======= تحصينات =======
     if ntext in ["تحصين","تحصينات","بناء تحصين"]:
         p = get_player(data, uid)
@@ -8767,7 +8931,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "org_invites":     {},
                 "news_channel_id": news_ch,
                 "news_topic_id":   news_topic,
-                "stock_market":    {"نفط":{"price":100,"trend":0},"قمح":{"price":40,"trend":0},"حديد":{"price":60,"trend":0},"غاز":{"price":80,"trend":0},"ذهب":{"price":150,"trend":0}},
+                "stock_market":    {"نفط":{"price":500,"trend":0},"غاز":{"price":400,"trend":0},"صلب":{"price":350,"trend":0},"قمح":{"price":20,"trend":0},"ذهب":{"price":800,"trend":0}},
                 "last_stock_update": 0,
                 "world_event":     None,
                 "peace_requests":  {},
@@ -9384,8 +9548,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
 
-    if query.data == "cancel":
-        await query.edit_message_text("❌ تم الالغاء."); return
+    if query.data == "repair_all":
+        if not p: await query.edit_message_text("❌ مش مسجل."); return
+        damage_log = p.get("disaster_damage", {})
+        damages = {k: v for k, v in damage_log.items() if not k.startswith("_") and v > 0}
+        if not damages:
+            await query.edit_message_text("✅ لا يوجد أضرار!"); return
+        total_cost = sum(int(RESOURCE_FACILITIES.get(r,{}).get("base_cost",30000) * q * 0.6) for r, q in damages.items())
+        if p["gold"] < total_cost:
+            await query.edit_message_text(
+                f"❌ *رصيد غير كافٍ!*\n"
+                f"المطلوب: {CUR}{total_cost:,} | عندك: {CUR}{p['gold']:,}",
+                parse_mode="Markdown"); return
+        data["players"][str(uid)]["gold"] -= total_cost
+        facs = data["players"][str(uid)].setdefault("facilities", {})
+        for res, qty in damages.items():
+            facs[res] = facs.get(res, 0) + qty
+        data["players"][str(uid)]["disaster_damage"] = {"_last_disaster": damage_log.get("_last_disaster","")}
+        save_data(data)
+        repaired = ", ".join(f"{RESOURCE_FACILITIES.get(r,{}).get('emoji','🏭')}{r}×{q}" for r,q in damages.items())
+        await query.edit_message_text(
+            f"🔧 *تم الإصلاح الكامل!*\n{sep()}\n"
+            f"✅ {repaired}\n"
+            f"💸 -{CUR}{total_cost:,}\n"
+            f"💰 رصيدك: {CUR}{p['gold']-total_cost:,}",
+            parse_mode="Markdown")
+        return
 
     # ======= إعلان — اختيار الوجهة =======
     if query.data in ["announce_topic","announce_groups","announce_both"] and is_admin(uid):
@@ -9706,6 +9894,56 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ---- زراعة محصول ----
+    if query.data.startswith("farm_complex_"):
+        crop = query.data.replace("farm_complex_","")
+        if not p: await query.edit_message_text("❌ مش مسجل."); return
+        if crop not in FARM_CROPS: await query.edit_message_text("❌ محصول غير معروف."); return
+        COMPLEX_COUNT = 15
+        infra       = p.get("infrastructure", 0)
+        region      = p.get("region", "")
+        merged_regs = p.get("merged_regions", [])
+        max_farms   = get_max_farms(infra, region, merged_regs)
+        total_farms = sum(p.get("crops",{}).values())
+        remaining   = max_farms - total_farms
+        if remaining < COMPLEX_COUNT:
+            await query.edit_message_text(
+                f"❌ مش عندك مساحة كافية! متاح {remaining} فقط."); return
+        fc         = FARM_CROPS[crop]
+        unit_cost  = get_farm_cost(data, crop)
+        total_cost = unit_cost * COMPLEX_COUNT
+        if p["gold"] < total_cost:
+            await query.edit_message_text(
+                f"❌ تحتاج *{total_cost:,}¥* لبناء {COMPLEX_COUNT} مزرعة.\nعندك {p['gold']:,}¥.",
+                parse_mode="Markdown"); return
+        preferred = list(REGION_PREFERRED_CROPS.get(region, []))
+        for mr in merged_regs:
+            for c in REGION_PREFERRED_CROPS.get(mr, []):
+                if c not in preferred: preferred.append(c)
+        amount    = int(fc["amount"] * 1.5) if crop in preferred else fc["amount"]
+        bonus_txt = " (+50% ⭐)" if crop in preferred else ""
+        data["players"][str(uid)]["gold"] -= total_cost
+        crops_inv = data["players"][str(uid)].get("crops", {})
+        crops_inv[crop] = crops_inv.get(crop, 0) + COMPLEX_COUNT
+        data["players"][str(uid)]["crops"] = crops_inv
+        ca = data["players"][str(uid)].get("crops_amount", {})
+        ca[crop] = amount
+        data["players"][str(uid)]["crops_amount"] = ca
+        data["players"][str(uid)]["last_build"] = time.time()
+        leveled_up, new_lvl = add_xp(data, uid, 70 * COMPLEX_COUNT)
+        save_data(data)
+        msg = (
+            f"🏗️ *تم بناء المجمع الزراعي!*\n{sep()}\n"
+            f"{fc['emoji']} *{fc['name']}* × {COMPLEX_COUNT} مزرعة{bonus_txt}\n"
+            f"📦 {amount * COMPLEX_COUNT}طن/دورة إجمالي\n"
+            f"💸 -{total_cost:,}¥\n"
+            f"💰 رصيدك: {p['gold']-total_cost:,}¥\n"
+            f"🌾 مزارعك: {total_farms+COMPLEX_COUNT}/{max_farms}\n"
+            f"⭐ +{70*COMPLEX_COUNT} XP"
+        )
+        if leveled_up: msg += f"\n🎊 {new_lvl['name']} {new_lvl['emoji']}"
+        await query.edit_message_text(msg, parse_mode="Markdown")
+        return
+
     if query.data.startswith("farm_"):
         crop = query.data.replace("farm_","")
         if not p: await query.edit_message_text("❌ مش مسجل."); return
